@@ -1,0 +1,10 @@
+# Virtual Environment
+venv/
+__pycache__/
+
+# Downloads
+downloads/
+
+# IDE / Editor specific
+.vscode/
+.idea/
