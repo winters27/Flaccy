@@ -19,6 +19,12 @@ if [ -d "$APP_DIR" ]; then
   echo "Updating existing repo..."
   cd "$APP_DIR"
   git pull
+
+  # Restore personal app.py if it exists
+  if [ -f "app.py.personal" ]; then
+    echo "Restoring personal app configuration..."
+    cp app.py.personal app.py
+  fi
 else
   echo "Cloning repository..."
   git clone "$GIT_REPO" "$APP_DIR"
