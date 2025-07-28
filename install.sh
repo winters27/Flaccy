@@ -18,7 +18,8 @@ USER=$(whoami)
 if [ -d "$APP_DIR" ]; then
   echo "Updating existing repo..."
   cd "$APP_DIR"
-  git pull
+  git fetch --all
+  git reset --hard origin/main
 
   # Restore personal app.py if it exists
   if [ -f "app.py.personal" ]; then
