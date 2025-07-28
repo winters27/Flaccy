@@ -112,7 +112,7 @@ body {
     padding: 20px;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: auto;
 }
 
 /* --- Sidebar Components --- */
@@ -377,6 +377,7 @@ input[type="file"]::file-selector-button:hover {
     overflow-y: auto;
     flex-grow: 1;
     min-height: 0;
+    padding-bottom: 20px;
 }
 
 .search-result-item {
@@ -415,6 +416,24 @@ input[type="file"]::file-selector-button:hover {
     width: auto;
     padding: 8px 12px;
 }
+
+#show-more-btn {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+    padding: 10px;
+    font-size: 14px;
+    border: 1px solid rgba(151, 177, 185, 0.2);
+    border-radius: 8px;
+    color: var(--text-color);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+#show-more-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+
 
 /* --- Enhanced Mobile Responsive Design --- */
 @media (max-width: 768px) {
@@ -592,9 +611,9 @@ input[type="file"]::file-selector-button:hover {
     }
 
     .album-art {
-        width: 65px;
-        height: 65px;
-        border-radius: 8px;
+        width: 75px;
+        height: 75px;
+        border-radius: 6px;
         flex-shrink: 0;
     }
 

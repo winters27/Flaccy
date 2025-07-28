@@ -2,6 +2,15 @@ let totalDownloads = 0;
 let completedDownloads = 0;
 let eventSource = null;
 
+// --- Infinite Scroll Globals ---
+let currentQuery = '';
+let currentSearchType = 'track';
+let currentOffset = 0;
+let isLoading = false;
+let noMoreResults = false;
+const SEARCH_LIMIT = 20;
+
+
 function resetProgressBar() {
     totalDownloads = 0;
     completedDownloads = 0;
@@ -43,7 +52,7 @@ function logMessage(message, type = 'info') {
     log.scrollTop = log.scrollHeight;
 }
 
-function displaySearchResults(results) {
+function displaySearchResults(results, append = false) {
     const contentArea = document.querySelector('.content-area');
     let resultsContainer = document.getElementById('search-results');
 
@@ -54,21 +63,24 @@ function displaySearchResults(results) {
         contentArea.insertBefore(resultsContainer, contentArea.firstChild);
     }
     
-    resultsContainer.innerHTML = '';
-
-    if (!results || results.length === 0) {
-        resultsContainer.innerHTML = '<p>No results found.</p>';
-        return;
+    if (!append) {
+        resultsContainer.innerHTML = '';
     }
 
-    const searchType = document.querySelector('input[name="search-type"]:checked').value;
+    if (!results || results.length === 0) {
+        if (!append) {
+            resultsContainer.innerHTML = '<p>No results found.</p>';
+        }
+        noMoreResults = true;
+        return;
+    }
 
     results.forEach(item => {
         const itemElement = document.createElement('div');
         itemElement.classList.add('search-result-item');
 
-        if (searchType === 'track') {
-            const albumArt = item.album && item.album.image ? item.album.image.small : 'flaccy.png';
+        if (currentSearchType === 'track') {
+            const albumArt = item.album && item.album.image && item.album.image.small ? item.album.image.small : 'flaccy.png';
             const title = item.title;
             const artist = item.performer ? item.performer.name : 'Unknown Artist';
 
@@ -93,8 +105,8 @@ function displaySearchResults(results) {
                 .then(data => logMessage(data.error || data.message, data.error ? 'error' : 'info'))
                 .catch(error => logMessage('Failed to start song download.', 'error'));
             });
-        } else if (searchType === 'album') {
-            const albumArt = item.image ? item.image.small : 'flaccy.png';
+        } else if (currentSearchType === 'album') {
+            const albumArt = item.image && item.image.small ? item.image.small : 'flaccy.png';
             const title = item.title;
             const artist = item.artist ? item.artist.name : 'Unknown Artist';
 
@@ -127,7 +139,7 @@ function displaySearchResults(results) {
                     logMessage(`Queueing ${totalDownloads} tracks for download...`, 'info');
 
                     for (const track of tracks) {
-                        await new Promise(resolve => setTimeout(resolve, 200)); // Delay between each track download start
+                        await new Promise(resolve => setTimeout(resolve, 200));
                         fetch('/api/download-song', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -141,6 +153,23 @@ function displaySearchResults(results) {
         }
         resultsContainer.appendChild(itemElement);
     });
+
+    // --- Show More Button ---
+    let existingBtn = document.getElementById('show-more-btn');
+    if (existingBtn) {
+        existingBtn.remove();
+    }
+
+    if (!noMoreResults) {
+        let showMoreBtn = document.createElement('button');
+        showMoreBtn.id = 'show-more-btn';
+        showMoreBtn.textContent = 'Show More';
+        showMoreBtn.classList.add('download-btn');
+        showMoreBtn.addEventListener('click', () => {
+            performSearch(true);
+        });
+        resultsContainer.appendChild(showMoreBtn);
+    }
 }
 
 function setupEventSource() {
@@ -164,18 +193,61 @@ function setupEventSource() {
         console.error("EventSource failed:", err);
         logMessage("Connection lost. Reconnecting...", "error");
         eventSource.close();
-        // Reconnect after 5 seconds
         setTimeout(setupEventSource, 5000);
     };
     
     return eventSource;
 }
 
+function performSearch(append = false) {
+    if (isLoading || (append && noMoreResults)) return;
+
+    isLoading = true;
+    if (!append) {
+        currentOffset = 0;
+        noMoreResults = false;
+    }
+    
+    logMessage(`Searching for ${currentSearchType}: "${currentQuery}" (offset: ${currentOffset})...`, 'info');
+
+    fetch('/api/search', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+            query: currentQuery, 
+            type: currentSearchType,
+            limit: SEARCH_LIMIT,
+            offset: currentOffset
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            logMessage(data.error, 'error');
+            noMoreResults = true;
+        } else {
+            displaySearchResults(data, append);
+            currentOffset += data.length;
+            if (data.length < SEARCH_LIMIT) {
+                noMoreResults = true;
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        logMessage('Search failed.', 'error');
+        noMoreResults = true;
+    })
+    .finally(() => {
+        isLoading = false;
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    // --- EventSource for Server-Sent Events ---
     setupEventSource();
 
-    // --- Playlist Tab ---
     const playlistInput = document.getElementById('playlist-input');
     const startPlaylistBtn = document.getElementById('start-playlist-btn');
 
@@ -187,7 +259,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         resetProgressBar();
         
-        // To get totalDownloads for a playlist, we'd have to read the file client-side.
         const reader = new FileReader();
         reader.onload = function(e) {
             const content = e.target.result;
@@ -215,7 +286,6 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.readAsText(file);
     });
 
-    // --- Search Tab ---
     const searchInput = document.getElementById('search-input');
     const searchBtn = document.getElementById('search-btn');
 
@@ -226,27 +296,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        const searchType = document.querySelector('input[name="search-type"]:checked').value;
-        logMessage(`Searching for ${searchType}: "${query}"...`, 'info');
-
-        fetch('/api/search', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ query: query, type: searchType })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                logMessage(data.error, 'error');
-            } else {
-                displaySearchResults(data);
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            logMessage('Search failed.', 'error');
-        });
+        currentQuery = query;
+        currentSearchType = document.querySelector('input[name="search-type"]:checked').value;
+        
+        performSearch(false);
     });
 });
