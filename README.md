@@ -116,15 +116,26 @@ sudo nano /etc/nginx/sites-available/flaccy
 Paste:
 
 ```nginx
+upstream flaccy_server {
+    server unix:/home/your_user/flaccy/flaccy.sock;
+}
+
 server {
     listen 80;
     server_name flaccy.yourdomain.com;
 
     location / {
-        proxy_pass http://unix:/home/your_user/flaccy/flaccy.sock;
-        include proxy_params;
+        proxy_pass http://flaccy_server;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
     }
 }
+
 ```
 
 Enable the site and restart Nginx:
