@@ -1,6 +1,7 @@
-let totalDownloads = 0;
-let completedDownloads = 0;
 let eventSource = null;
+const activeToasts = new Map();
+const toastQueue = [];
+let isProcessingQueue = false;
 
 // --- Infinite Scroll Globals ---
 let currentQuery = '';
@@ -10,21 +11,123 @@ let isLoading = false;
 let noMoreResults = false;
 const SEARCH_LIMIT = 20;
 
-
-function resetProgressBar() {
-    totalDownloads = 0;
-    completedDownloads = 0;
-    const progressBar = document.getElementById('progress-bar');
-    progressBar.style.width = '0%';
+function processToastQueue() {
+    if (isProcessingQueue || toastQueue.length === 0) return;
+    
+    isProcessingQueue = true;
+    const { downloadId, trackInfo } = toastQueue.shift();
+    
+    createToast(downloadId, trackInfo);
+    
+    setTimeout(() => {
+        isProcessingQueue = false;
+        processToastQueue();
+    }, 150);
 }
 
-function updateProgressBar() {
-    if (totalDownloads > 0) {
-        const percent = (completedDownloads / totalDownloads) * 100;
-        const progressBar = document.getElementById('progress-bar');
-        progressBar.style.width = `${percent}%`;
+function createToast(downloadId, trackInfo) {
+    if (activeToasts.has(downloadId)) {
+        return;
+    }
+
+    const toastContainer = document.getElementById('toast-queue-container');
+    const toast = document.createElement('div');
+    toast.id = `toast-${downloadId}`;
+    toast.className = 'toast';
+
+    const albumArt = trackInfo.albumArtUrl || 'flaccy.png';
+
+    toast.innerHTML = `
+        <div class="toast-album-art-container">
+            <img src="${albumArt}" alt="Album Art" class="toast-album-art" onerror="this.src='flaccy.png'">
+            <div class="toast-progress-overlay">0%</div>
+        </div>
+        <div class="toast-content">
+            <div class="toast-track-title" title="${trackInfo.title}">${trackInfo.title}</div>
+            <div class="toast-track-details" title="${trackInfo.artist} - ${trackInfo.album}">${trackInfo.artist} - ${trackInfo.album}</div>
+            <div class="toast-progress-bar-container">
+                <div class="toast-progress-bar"></div>
+            </div>
+        </div>
+    `;
+
+    toastContainer.appendChild(toast);
+
+    activeToasts.set(downloadId, {
+        element: toast,
+        progress: 0,
+        completed: false
+    });
+
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toast.classList.add('show');
+        });
+    });
+}
+
+function updateToastProgress(downloadId, progress) {
+    const toastData = activeToasts.get(downloadId);
+    if (!toastData || toastData.completed) return;
+
+    const { element } = toastData;
+    const progressBar = element.querySelector('.toast-progress-bar');
+    const progressOverlay = element.querySelector('.toast-progress-overlay');
+    
+    if (progressBar && progressOverlay) {
+        progressBar.style.width = `${progress}%`;
+        progressOverlay.textContent = `${Math.round(progress)}%`;
+        
+        toastData.progress = progress;
+
+        if (progress >= 100 && !toastData.completed) {
+            toastData.completed = true;
+            toastData.completedAt = Date.now();
+            progressOverlay.textContent = '✓';
+            progressBar.classList.add('complete');
+            
+            setTimeout(() => {
+                removeToast(downloadId);
+            }, 2500);
+        }
     }
 }
+
+function updateToastAlbumArt(downloadId, albumArtUrl) {
+    const toastData = activeToasts.get(downloadId);
+    if (!toastData) return;
+    
+    const albumArtImg = toastData.element.querySelector('.toast-album-art');
+    if (albumArtImg && albumArtUrl) {
+        const img = new Image();
+        img.onload = function() {
+            albumArtImg.src = albumArtUrl;
+        };
+        img.src = albumArtUrl;
+    }
+}
+
+function removeToast(downloadId) {
+    const toastData = activeToasts.get(downloadId);
+    if (!toastData) return;
+    
+    const { element } = toastData;
+    element.classList.remove('show');
+    
+    element.addEventListener('transitionend', () => {
+        element.remove();
+        activeToasts.delete(downloadId);
+    }, { once: true });
+}
+
+// Clean up any stuck toasts periodically
+setInterval(() => {
+    activeToasts.forEach((toastData, downloadId) => {
+        if (toastData.completed && toastData.completedAt && Date.now() - toastData.completedAt > 5000) {
+            removeToast(downloadId);
+        }
+    });
+}, 5000);
 
 function showTab(tabName) {
     const tabs = document.querySelectorAll('.tab-content');
@@ -38,6 +141,10 @@ function showTab(tabName) {
 
 function logMessage(message, type = 'info') {
     const log = document.getElementById('status-log');
+    if (!log) {
+        console.log(`[${type}] ${message}`);
+        return;
+    }
     const timestamp = new Date().toLocaleTimeString();
     const p = document.createElement('p');
     p.innerHTML = `<span style="color: var(--text-muted-color)">[${timestamp}]</span> ${message}`;
@@ -60,7 +167,7 @@ function displaySearchResults(results, append = false) {
         resultsContainer = document.createElement('div');
         resultsContainer.id = 'search-results';
         resultsContainer.classList.add('section');
-        contentArea.insertBefore(resultsContainer, contentArea.firstChild);
+        contentArea.appendChild(resultsContainer);
     }
     
     if (!append) {
@@ -92,19 +199,16 @@ function displaySearchResults(results, append = false) {
                 </div>
                 <button class="download-btn">Download</button>
             `;
-
-            itemElement.querySelector('.download-btn').addEventListener('click', () => {
-                resetProgressBar();
-                totalDownloads = 1;
-                fetch('/api/download-song', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ track: item })
-                })
-                .then(response => response.json())
-                .then(data => logMessage(data.error || data.message, data.error ? 'error' : 'info'))
-                .catch(error => logMessage('Failed to start song download.', 'error'));
+            // For TRACK items:
+            itemElement.dataset.item = JSON.stringify({
+                id: item.id,
+                title: item.title,
+                artist: item.performer.name,
+                album: item.album.title,
+                album_id: item.album.id,
+                album_art: item.album.image.small
             });
+
         } else if (currentSearchType === 'album') {
             const albumArt = item.image && item.image.small ? item.image.small : 'flaccy.png';
             const title = item.title;
@@ -118,37 +222,12 @@ function displaySearchResults(results, append = false) {
                 </div>
                 <button class="download-btn">Download Album</button>
             `;
-
-            itemElement.querySelector('.download-btn').addEventListener('click', async () => {
-                resetProgressBar();
-                logMessage(`Fetching tracks for album: ${item.title}...`, 'info');
-                try {
-                    const response = await fetch('/api/get-album-tracks', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ album_id: item.id })
-                    });
-                    const tracks = await response.json();
-
-                    if (tracks.error) {
-                        logMessage(tracks.error, 'error');
-                        return;
-                    }
-
-                    totalDownloads = tracks.length;
-                    logMessage(`Queueing ${totalDownloads} tracks for download...`, 'info');
-
-                    for (const track of tracks) {
-                        await new Promise(resolve => setTimeout(resolve, 200));
-                        fetch('/api/download-song', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ track: track })
-                        });
-                    }
-                } catch (error) {
-                    logMessage('Failed to get album tracks.', 'error');
-                }
+            // For ALBUM items:
+            itemElement.dataset.item = JSON.stringify({
+                id: item.id,
+                title: item.title,
+                artist: item.artist.name,
+                album_art: item.image.small
             });
         }
         resultsContainer.appendChild(itemElement);
@@ -178,14 +257,34 @@ function setupEventSource() {
     }
     
     eventSource = new EventSource("/api/status");
-    
+
     eventSource.onmessage = function(event) {
         const data = JSON.parse(event.data);
-        if (data.type === 'progress') {
-            completedDownloads++;
-            updateProgressBar();
-        } else if (data.type !== 'heartbeat') {
-            logMessage(data.message, data.type);
+
+        switch (data.type) {
+            case 'download_start':
+                toastQueue.push({
+                    downloadId: data.download_id,
+                    trackInfo: data.track_info
+                });
+                processToastQueue();
+                break;
+            case 'update_toast_art':
+                updateToastAlbumArt(data.download_id, data.albumArtUrl);
+                break;
+            case 'progress':
+                updateToastProgress(data.download_id, data.progress);
+                break;
+            case 'info':
+            case 'success':
+            case 'error':
+                logMessage(data.message, data.type);
+                break;
+            case 'heartbeat':
+                // Do nothing for heartbeats
+                break;
+            default:
+                logMessage(`Unknown event type: ${data.type}`, 'error');
         }
     };
     
@@ -245,11 +344,164 @@ function performSearch(append = false) {
     });
 }
 
+function downloadTrack(track) {
+    fetch('/api/download-song', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ track })
+    })
+    .then(response => {
+        if (response.status === 401) {
+            return response.json().then(data => {
+                throw new Error(data.error || 'Authentication required');
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            logMessage(data.error, 'error');
+        } else {
+            logMessage(`Queued for download: ${track.title}`, 'info');
+        }
+    })
+    .catch(error => {
+        logMessage(`Download failed: ${error.message}`, 'error');
+    });
+}
+
+function downloadAlbum(albumId) {
+    fetch('/api/download-album', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ album_id: albumId })
+    })
+    .then(response => {
+        if (response.status === 401) {
+            return response.json().then(data => {
+                throw new Error(data.error || 'Authentication required');
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            logMessage(data.error, 'error');
+        } else {
+            logMessage(data.message, 'success');
+        }
+    })
+    .catch(error => {
+        logMessage(`Album download failed: ${error.message}`, 'error');
+    });
+}
+
+function cancelDownloads() {
+    fetch('/api/cancel-downloads', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            logMessage('All downloads have been cancelled.', 'info');
+        } else {
+            logMessage('Failed to cancel downloads.', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        logMessage('Failed to send cancel request.', 'error');
+    });
+
+    document.getElementById('cancel-playlist-btn').style.display = 'none';
+    document.getElementById('start-playlist-btn').style.display = 'inline-block';
+}
+
+function showQobuzLoginModal() {
+    // Check if modal already exists
+    if (document.getElementById('qobuz-login-modal')) {
+        return;
+    }
+
+    const modalHTML = `
+        <div id="qobuz-login-modal" class="modal-overlay">
+            <div class="modal-content">
+                <h2>Qobuz Login Required</h2>
+                <p>Your session has expired. Please log in to Qobuz to continue.</p>
+                <form id="qobuz-login-form">
+                    <input type="email" id="qobuz-email" placeholder="Qobuz Email" required>
+                    <input type="password" id="qobuz-password" placeholder="Qobuz Password" required>
+                    <button type="submit">Login to Qobuz</button>
+                </form>
+                <p id="qobuz-login-error" class="error" style="display:none;"></p>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+    const form = document.getElementById('qobuz-login-form');
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const email = document.getElementById('qobuz-email').value;
+        const password = document.getElementById('qobuz-password').value;
+        const errorEl = document.getElementById('qobuz-login-error');
+
+        fetch('/api/qobuz-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                logMessage('Qobuz login successful!', 'success');
+                document.getElementById('qobuz-login-modal').remove();
+            } else {
+                errorEl.textContent = data.error || 'An unknown error occurred.';
+                errorEl.style.display = 'block';
+            }
+        })
+        .catch(err => {
+            errorEl.textContent = `Request failed: ${err}`;
+            errorEl.style.display = 'block';
+        });
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+    fetch('/api/check-session')
+        .then(response => response.json())
+        .then(data => {
+            if (data.flaccy_logged_in && !data.qobuz_logged_in) {
+                showQobuzLoginModal();
+            }
+        });
+        
     setupEventSource();
+
+    const contentArea = document.querySelector('.content-area');
+    contentArea.addEventListener('click', function(e) {
+        if (e.target.classList.contains('download-btn')) {
+            const item = e.target.closest('.search-result-item');
+            if (!item) return;
+            
+            const itemData = JSON.parse(item.dataset.item);
+            
+            const searchType = item.closest('#search-results') ? currentSearchType : 'track';
+
+            if (searchType === 'track') {
+                downloadTrack(itemData);
+            } else if (searchType === 'album') {
+                downloadAlbum(itemData.id);
+            }
+        }
+    });
 
     const playlistInput = document.getElementById('playlist-input');
     const startPlaylistBtn = document.getElementById('start-playlist-btn');
+    const cancelBtn = document.getElementById('cancel-playlist-btn');
+
+    cancelBtn.addEventListener('click', cancelDownloads);
 
     startPlaylistBtn.addEventListener('click', () => {
         const file = playlistInput.files[0];
@@ -257,13 +509,15 @@ document.addEventListener('DOMContentLoaded', () => {
             logMessage('Please select a playlist file.', 'error');
             return;
         }
-        resetProgressBar();
         
         const reader = new FileReader();
         reader.onload = function(e) {
             const content = e.target.result;
             const lines = content.split('\n').filter(line => line.includes(' - '));
-            totalDownloads = lines.length;
+            logMessage(`Queueing ${lines.length} tracks from playlist...`, 'info');
+
+            startPlaylistBtn.style.display = 'none';
+            document.getElementById('cancel-playlist-btn').style.display = 'inline-block';
 
             const formData = new FormData();
             formData.append('playlist', file);
@@ -281,6 +535,10 @@ document.addEventListener('DOMContentLoaded', () => {
             .catch(error => {
                 console.error('Error:', error);
                 logMessage('Failed to start playlist download.', 'error');
+            })
+            .finally(() => {
+                startPlaylistBtn.style.display = 'inline-block';
+                document.getElementById('cancel-playlist-btn').style.display = 'none';
             });
         };
         reader.readAsText(file);
@@ -301,4 +559,18 @@ document.addEventListener('DOMContentLoaded', () => {
         
         performSearch(false);
     });
+
+    // Add Enter key support for search
+    searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            searchBtn.click();
+        }
+    });
+});
+
+// Clean up on page unload
+window.addEventListener('beforeunload', () => {
+    if (eventSource) {
+        eventSource.close();
+    }
 });

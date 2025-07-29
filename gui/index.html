@@ -3,8 +3,10 @@
 <head>
     <title>Flaccy</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="style.css?v=1.2">
-    <link rel="icon" href="./flaccy.png" type="image/png">
+    <link rel="stylesheet" type="text/css" href="style.css?v=1.3">
+    <link rel="icon" type="image/png" sizes="16x16" href="./flaccy.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="./flaccy.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./flaccy.png">
 </head>
 <body>
     <div class="main-container">
@@ -14,28 +16,17 @@
                 <h1>Flaccy</h1>
             </div>
             <div class="window-controls">
+                <a href="/logout" class="logout-button">Logout</a>
             </div>
         </div>
-        <div class="content-wrapper">
-            <div class="sidebar">
+        <div class="content-area">
+            <div class="top-controls section">
                 <div class="tabs">
-                    <button class="tab-button active" onclick="showTab('playlist')">Playlist</button>
-                    <button class="tab-button" onclick="showTab('search')">Search</button>
+                    <button class="tab-button active" onclick="showTab('search')">Search</button>
+                    <button class="tab-button" onclick="showTab('playlist')">Playlist</button>
                 </div>
-
                 <div class="controls">
-                    <div id="playlist" class="tab-content active">
-                        <div class="section">
-                            <label for="playlist-input">Select Playlist File:</label>
-                            <input type="file" id="playlist-input" accept=".txt" />
-                        </div>
-                        <div class="section">
-                            <button id="start-playlist-btn">Start Playlist Download</button>
-                        </div>
-                    </div>
-            
-                <div id="search" class="tab-content">
-                    <div class="section">
+                    <div id="search" class="tab-content active">
                         <div class="search-type-selector">
                             <input type="radio" id="search-type-track" name="search-type" value="track" checked>
                             <label for="search-type-track">Track</label>
@@ -44,18 +35,14 @@
                         </div>
                         <input type="text" id="search-input" placeholder="Search for a song or artist...">
                         <button id="search-btn">Search</button>
+                        <button id="cancel-search-btn" style="display:none;">Cancel</button>
                     </div>
-                </div>
-                </div>
-            </div>
-            
-            <div class="content-area">
-                <div class="status-log-container">
-                    <h2>Activity Log</h2>
-                    <div id="status-log"></div>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-bar" id="progress-bar"></div>
+                    <div id="playlist" class="tab-content">
+                        <label for="playlist-input">Select Playlist File:</label>
+                        <input type="file" id="playlist-input" accept=".txt" />
+                        <button id="start-playlist-btn">Start Playlist Download</button>
+                        <button id="cancel-playlist-btn" style="display:none;">Cancel</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -64,6 +51,8 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script src="script.js?v=1.3"></script>
+
+    <div id="toast-queue-container"></div>
 </body>
 </html>
