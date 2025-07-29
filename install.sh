@@ -50,7 +50,7 @@ if [ ! -f ".env" ]; then
   if [ -f ".env.template" ]; then
     echo "Creating .env from template..."
     cp .env.template .env
-    echo "⚠️  Please edit .env and add your Qobuz auth token before running the app."
+    echo "⚠️  Please edit the .env file with your desired settings before running the app."
   else
     echo "⚠️  .env.template not found. Cannot create .env file."
   fi
@@ -69,7 +69,7 @@ User=$USER
 Group=www-data
 WorkingDirectory=$APP_DIR
 Environment="PATH=$VENV_DIR/bin"
-ExecStart=$VENV_DIR/bin/gunicorn --workers 3 --worker-class gevent --bind unix:$SOCK_FILE -m 007 app:app
+ExecStart=$VENV_DIR/bin/gunicorn --workers 3 --worker-class gevent --bind unix:$SOCK_FILE -m 007 --timeout 300 app:app
 
 [Install]
 WantedBy=multi-user.target

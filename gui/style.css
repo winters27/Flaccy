@@ -444,7 +444,6 @@ input[type="file"]::file-selector-button:hover {
         padding: 0;
         align-items: stretch;
         height: 100vh;
-        overflow: hidden;
     }
 
     .main-container {

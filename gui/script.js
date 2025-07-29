@@ -109,15 +109,24 @@ function updateToastAlbumArt(downloadId, albumArtUrl) {
 
 function removeToast(downloadId) {
     const toastData = activeToasts.get(downloadId);
-    if (!toastData) return;
+    if (!toastData || toastData.isRemoving) return;
+
+    toastData.isRemoving = true;
     
     const { element } = toastData;
     element.classList.remove('show');
     
-    element.addEventListener('transitionend', () => {
-        element.remove();
+    const remove = () => {
+        if (document.body.contains(element)) {
+            element.remove();
+        }
         activeToasts.delete(downloadId);
-    }, { once: true });
+    };
+
+    element.addEventListener('transitionend', remove, { once: true });
+    
+    // Fallback timeout in case transitionend doesn't fire
+    setTimeout(remove, 1000);
 }
 
 // Clean up any stuck toasts periodically

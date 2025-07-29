@@ -40,18 +40,19 @@ pip install -r requirements.txt
 
 ### Step 4: Configure Environment
 
-The application requires a Qobuz user authentication token to function.
-
 1.  **Create the environment file:**
     Copy the template to a new `.env` file:
     ```bash
     cp .env.template .env
     ```
 
-2.  **Add your token:**
-    Open `.env` in a text editor and replace `"YOUR_TOKEN_HERE"` with your actual Qobuz token.
-
-    To get your token, log in to the Qobuz website, open your browser's developer tools, and look for the `user_auth_token` in the cookies for the `qobuz.com` domain.
+2.  **Edit the `.env` file:**
+    Open the `.env` file in a text editor and configure the following variables:
+    - `FLACCY_PASSWORD`: Set a password to protect the web interface.
+    - `SECRET_KEY`: A random string for session security. You can generate one with `openssl rand -hex 16`.
+    - `DOWNLOAD_DIRECTORY`: The absolute path where your music will be saved.
+    
+    After logging into the Flaccy web interface, you will be prompted to log in with your Qobuz credentials.
 
 ---
 
@@ -83,7 +84,7 @@ User=your_user
 Group=www-data
 WorkingDirectory=/home/your_user/flaccy
 Environment="PATH=/home/your_user/flaccy/venv/bin"
-ExecStart=/home/your_user/flaccy/venv/bin/gunicorn --workers 3 --bind unix:/home/your_user/flaccy/flaccy.sock -m 007 app:app
+ExecStart=/home/your_user/flaccy/venv/bin/gunicorn --workers 3 --worker-class gevent --bind unix:/home/your_user/flaccy/flaccy.sock -m 007 --timeout 300 app:app
 
 [Install]
 WantedBy=multi-user.target
@@ -116,13 +117,23 @@ sudo nano /etc/nginx/sites-available/flaccy
 Paste:
 
 ```nginx
+upstream flaccy_server {
+    server unix:/home/your_user/flaccy/flaccy.sock;
+}
+
 server {
     listen 80;
     server_name flaccy.yourdomain.com;
 
     location / {
-        proxy_pass http://unix:/home/your_user/flaccy/flaccy.sock;
-        include proxy_params;
+        proxy_pass http://flaccy_server;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
     }
 }
 ```
