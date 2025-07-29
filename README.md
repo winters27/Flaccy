@@ -136,6 +136,7 @@ server {
         proxy_read_timeout 300s;
     }
 }
+
 ```
 
 Enable the site and restart Nginx:
