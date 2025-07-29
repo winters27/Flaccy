@@ -83,7 +83,7 @@ User=your_user
 Group=www-data
 WorkingDirectory=/home/your_user/flaccy
 Environment="PATH=/home/your_user/flaccy/venv/bin"
-ExecStart=/home/your_user/flaccy/venv/bin/gunicorn --workers 3 --bind unix:/home/your_user/flaccy/flaccy.sock -m 007 app:app
+ExecStart=/home/your_user/flaccy/venv/bin/gunicorn --workers 3 --worker-class gevent --bind unix:/home/your_user/flaccy/flaccy.sock -m 007 --timeout 300 app:app
 
 [Install]
 WantedBy=multi-user.target
