@@ -17,7 +17,7 @@ monkey.patch_all()
 load_dotenv()
 
 # --- Configuration ---
-DOWNLOAD_DIRECTORY = '/var/lib/docker/volumes/nextcloud_nextcloud_data/_data/data/admin/files/Media/Music'
+DOWNLOAD_DIRECTORY = os.getenv("DOWNLOAD_DIRECTORY", "/downloads")
 MAX_THREADS = 10
 QOBUZ_APP_ID = "798273057"
 QOBUZ_APP_SECRET = "abb21364945c0583309667d13ca3d93a"
