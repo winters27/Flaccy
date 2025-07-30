@@ -744,6 +744,10 @@ input[type="file"]::file-selector-button:hover {
     opacity: 1;
 }
 
+.toast.error-toast .toast-track-title {
+    color: #ff4d4d;
+}
+
 .toast-album-art-container {
     position: relative;
     width: 48px;

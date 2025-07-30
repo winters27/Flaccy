@@ -129,6 +129,38 @@ function removeToast(downloadId) {
     setTimeout(remove, 1000);
 }
 
+function createErrorToast(message) {
+    const toastId = `error-${Date.now()}`;
+    const toastContainer = document.getElementById('toast-queue-container');
+    const toast = document.createElement('div');
+    toast.id = toastId;
+    toast.className = 'toast error-toast';
+
+    toast.innerHTML = `
+        <div class="toast-content">
+            <div class="toast-track-title">Error</div>
+            <div class="toast-track-details">${message}</div>
+        </div>
+    `;
+
+    toastContainer.appendChild(toast);
+
+    activeToasts.set(toastId, {
+        element: toast,
+        isRemoving: false
+    });
+
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toast.classList.add('show');
+        });
+    });
+
+    setTimeout(() => {
+        removeToast(toastId);
+    }, 5000);
+}
+
 // Clean up any stuck toasts periodically
 setInterval(() => {
     activeToasts.forEach((toastData, downloadId) => {
@@ -300,6 +332,7 @@ function setupEventSource() {
     eventSource.onerror = function(err) {
         console.error("EventSource failed:", err);
         logMessage("Connection lost. Reconnecting...", "error");
+        createErrorToast("Connection lost. Reconnecting...");
         eventSource.close();
         setTimeout(setupEventSource, 5000);
     };
@@ -334,6 +367,7 @@ function performSearch(append = false) {
     .then(data => {
         if (data.error) {
             logMessage(data.error, 'error');
+            createErrorToast(data.error);
             noMoreResults = true;
         } else {
             displaySearchResults(data, append);
@@ -346,6 +380,7 @@ function performSearch(append = false) {
     .catch(error => {
         console.error('Error:', error);
         logMessage('Search failed.', 'error');
+        createErrorToast('Search failed. Check console for details.');
         noMoreResults = true;
     })
     .finally(() => {
@@ -370,12 +405,17 @@ function downloadTrack(track) {
     .then(data => {
         if (data.error) {
             logMessage(data.error, 'error');
+            createErrorToast(data.error);
+            if (data.error.includes('Qobuz session expired')) {
+                showQobuzLoginModal();
+            }
         } else {
             logMessage(`Queued for download: ${track.title}`, 'info');
         }
     })
     .catch(error => {
         logMessage(`Download failed: ${error.message}`, 'error');
+        createErrorToast(`Download failed: ${error.message}`);
     });
 }
 
@@ -396,12 +436,17 @@ function downloadAlbum(albumId) {
     .then(data => {
         if (data.error) {
             logMessage(data.error, 'error');
+            createErrorToast(data.error);
+            if (data.error.includes('Qobuz session expired')) {
+                showQobuzLoginModal();
+            }
         } else {
             logMessage(data.message, 'success');
         }
     })
     .catch(error => {
         logMessage(`Album download failed: ${error.message}`, 'error');
+        createErrorToast(`Album download failed: ${error.message}`);
     });
 }
 
@@ -478,12 +523,22 @@ function showQobuzLoginModal() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    const qobuzLoginBtn = document.getElementById('qobuz-login-btn');
+
+    function updateQobuzLoginButton(isLoggedIn) {
+        if (isLoggedIn) {
+            qobuzLoginBtn.textContent = 'Logged in to Qobuz';
+            qobuzLoginBtn.disabled = true;
+        } else {
+            qobuzLoginBtn.textContent = 'Login to Qobuz';
+            qobuzLoginBtn.disabled = false;
+        }
+    }
+
     fetch('/api/check-session')
         .then(response => response.json())
         .then(data => {
-            if (data.flaccy_logged_in && !data.qobuz_logged_in) {
-                showQobuzLoginModal();
-            }
+            updateQobuzLoginButton(data.qobuz_logged_in);
         });
         
     setupEventSource();
@@ -574,6 +629,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') {
             searchBtn.click();
         }
+    });
+
+    qobuzLoginBtn.addEventListener('click', () => {
+        showQobuzLoginModal();
     });
 });
 

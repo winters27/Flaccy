@@ -24,6 +24,7 @@
                 <div class="tabs">
                     <button class="tab-button active" onclick="showTab('search')">Search</button>
                     <button class="tab-button" onclick="showTab('playlist')">Playlist</button>
+                    <button class="tab-button" onclick="showTab('settings')">Settings</button>
                 </div>
                 <div class="controls">
                     <div id="search" class="tab-content active">
@@ -42,6 +43,9 @@
                         <input type="file" id="playlist-input" accept=".txt" />
                         <button id="start-playlist-btn">Start Playlist Download</button>
                         <button id="cancel-playlist-btn" style="display:none;">Cancel</button>
+                    </div>
+                    <div id="settings" class="tab-content">
+                        <button id="qobuz-login-btn">Login to Qobuz</button>
                     </div>
                 </div>
             </div>

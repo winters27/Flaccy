@@ -13,3 +13,6 @@ downloads/
 # IDE / Editor specific
 .vscode/
 .idea/
+
+# Session files
+.qobuz_session

@@ -12,9 +12,9 @@ This workflow replicates the convenience of a commercial streaming service. You 
 
 ---
 
-## Installation on Ubuntu Server
+## Installation with Docker
 
-This guide walks through setting up Flaccy on an Ubuntu 22.04+ server.
+This guide walks through setting up Flaccy on any system with Docker and Docker Compose.
 
 ### Step 1: Clone the Repository
 
@@ -23,22 +23,7 @@ git clone https://github.com/winters27/Flaccy.git
 cd Flaccy
 ```
 
-### Step 2: Set Up a Virtual Environment
-
-```bash
-sudo apt update
-sudo apt install python3-venv -y
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### Step 3: Install Python Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### Step 4: Configure Environment
+### Step 2: Configure Environment
 
 1.  **Create the environment file:**
     Copy the template to a new `.env` file:
@@ -51,6 +36,8 @@ pip install -r requirements.txt
     - `FLACCY_PASSWORD`: Set a password to protect the web interface.
     - `SECRET_KEY`: A random string for session security. You can generate one with `openssl rand -hex 16`.
     - `DOWNLOAD_DIRECTORY`: The absolute path where your music will be saved.
+    - `UID`: The user ID to run the container as. Find it with `id -u`.
+    - `GID`: The group ID to run the container as. Find it with `id -g`.
     
     After logging into the Flaccy web interface, you will be prompted to log in with your Qobuz credentials.
 
@@ -58,98 +45,19 @@ pip install -r requirements.txt
 
 ## Running Flaccy
 
-### Option A: Development (Manual Start)
+To run Flaccy, simply use Docker Compose:
 
 ```bash
-gunicorn --workers 3 --bind unix:/home/your_user/flaccy/flaccy.sock -m 007 app:app
+docker-compose up --build -d
 ```
 
-### Option B: Production with systemd
-
-Create a systemd service file:
-
-```bash
-sudo nano /etc/systemd/system/flaccy.service
-```
-
-Paste the following (update paths as needed):
-
-```ini
-[Unit]
-Description=Gunicorn instance to serve Flaccy
-After=network.target
-
-[Service]
-User=your_user
-Group=www-data
-WorkingDirectory=/home/your_user/flaccy
-Environment="PATH=/home/your_user/flaccy/venv/bin"
-ExecStart=/home/your_user/flaccy/venv/bin/gunicorn --workers 3 --worker-class gevent --bind unix:/home/your_user/flaccy/flaccy.sock -m 007 --timeout 300 app:app
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl start flaccy
-sudo systemctl enable flaccy
-```
-
----
-
-## Reverse Proxy with Nginx
-
-Install Nginx:
-
-```bash
-sudo apt install nginx -y
-```
-
-Create an Nginx config:
-
-```bash
-sudo nano /etc/nginx/sites-available/flaccy
-```
-
-Paste:
-
-```nginx
-upstream flaccy_server {
-    server unix:/home/your_user/flaccy/flaccy.sock;
-}
-
-server {
-    listen 80;
-    server_name flaccy.yourdomain.com;
-
-    location / {
-        proxy_pass http://flaccy_server;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-    }
-}
-
-```
-
-Enable the site and restart Nginx:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/flaccy /etc/nginx/sites-enabled
-sudo nginx -t
-sudo systemctl restart nginx
-```
+The application will be available at `http://localhost:5001`.
 
 ---
 
 ## Secure Access with Cloudflare Tunnel
+
+For secure remote access, you can use Cloudflare Tunnel.
 
 ### Step 1: Install cloudflared
 
@@ -184,7 +92,7 @@ tunnel: <TUNNEL_ID>
 credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
 ingress:
   - hostname: flaccy.yourdomain.com
-    service: http://localhost
+    service: http://localhost:5001
   - service: http_status:404
 ```
 
@@ -210,33 +118,13 @@ sudo systemctl enable cloudflared
 
 If you are downloading music to a shared media directory (such as a Nextcloud volume or mounted drive), ensure that the target directory is:
 
-1. Writable by your system user (`your_user`)
-2. Traversable by `cloudflared` and `gunicorn` (if accessing outside docker volumes)
+1. Writable by the user specified by `UID` and `GID` in your `.env` file.
 
 For example:
 
 ```bash
-sudo chmod +x /var/lib/docker
-sudo chown -R your_user:www-data /your/target/music/folder
+sudo chown -R $(id -u):$(id -g) /your/target/music/folder
 ```
-
----
-
-## Automated Setup Script
-
-You can use the following one-liner to install Flaccy interactively:
-
-```bash
-bash <(curl -s https://raw.githubusercontent.com/winters27/Flaccy/main/install.sh)
-```
-
-This script will prompt you to fill in:
-
-- Your Ubuntu username
-- The domain you want to use
-- The full path to where the project will be installed
-
-It then installs Python, Nginx, Gunicorn, sets up systemd, and configures Cloudflare Tunnel.
 
 ---
 

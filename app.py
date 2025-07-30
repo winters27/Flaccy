@@ -17,10 +17,9 @@ monkey.patch_all()
 load_dotenv()
 
 # --- Configuration ---
-DOWNLOAD_DIRECTORY = os.getenv("DOWNLOAD_DIRECTORY")
-if not DOWNLOAD_DIRECTORY:
-    print("Error: DOWNLOAD_DIRECTORY environment variable is not set. Please configure it in your .env file.")
-    exit(1)
+DOWNLOAD_DIRECTORY = os.getenv("DOWNLOAD_DIRECTORY", "/app/downloads")
+if not os.getenv("DOWNLOAD_DIRECTORY"):
+    print("Warning: DOWNLOAD_DIRECTORY environment variable not set. Using default: /app/downloads")
 QOBUZ_APP_ID = "798273057"
 QOBUZ_APP_SECRET = "abb21364945c0583309667d13ca3d93a"
 FLACCY_PASSWORD = os.getenv("FLACCY_PASSWORD")
@@ -45,6 +44,19 @@ qobuz.api.register_app(
 status_messages = []
 download_queue = queue.Queue()
 MAX_WORKERS = 3
+qobuz_session_data = {}
+
+def load_qobuz_session():
+    """Loads Qobuz session from file if it exists."""
+    global qobuz_session_data
+    if os.path.exists('.qobuz_session'):
+        try:
+            with open('.qobuz_session', 'r') as f:
+                qobuz_session_data = json.load(f)
+                print("Qobuz session loaded from file.")
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"Could not load Qobuz session: {e}")
+            qobuz_session_data = {}
 
 # --- Core Music Downloading Logic ---
 
@@ -119,15 +131,27 @@ def _download_song_logic(artist, song, user_id, auth_token):
     update_status(type='info', message=f"Searching for: {song_display}")
     track = _search_track(artist, song)
     if track:
-        download_queue.put((track, user_id, auth_token))
+        # Get album art url
+        album_art_url = ''
+        try:
+            album_data = qobuz.api.request('album/get', album_id=track.album.id)
+            album_art_url = album_data.get('image', {}).get('small', '')
+        except Exception as e:
+            update_status(type='warning', message=f"Could not get album art for {song_display}: {e}")
+
+        download_queue.put((track, user_id, auth_token, album_art_url))
     else:
         update_status(type='error', message=f"Could not find a match for: {song_display}")
 
 def worker():
     """Worker greenlet to process the download queue."""
+    print(f"DEBUG: Worker started!")
     while True:
-        track, user_id, auth_token, album_art_url = download_queue.get()
-        _download_song_logic_by_track(track, user_id, auth_token, album_art_url)
+        try:
+            track, user_id, auth_token, album_art_url = download_queue.get()
+            _download_song_logic_by_track(track, user_id, auth_token, album_art_url)
+        except Exception as e:
+            update_status(type='error', message=f"An error occurred in the download worker: {e}")
 
 def _download_song_logic_by_track(track, user_id, auth_token, album_art_url):
     """The main logic for downloading and processing a single song using track data."""
@@ -182,23 +206,52 @@ def _download_song_logic_by_track(track, user_id, auth_token, album_art_url):
         total_length = int(stream_response.headers.get('content-length', 0))
         downloaded = 0
         
-        filename = f"{re.sub(r'[<>:\"/\\\\|?*]', '', track.artist.name)} - {re.sub(r'[<>:\"/\\\\|?*]', '', track.title)}.flac"
+        safe_artist = re.sub(r'[<>:"/\\|?*]', '', track.artist.name)
+        safe_title = re.sub(r'[<>:"/\\|?*]', '', track.title)
+        filename = f"{safe_artist} - {safe_title}.flac"
+
         
         os.makedirs(DOWNLOAD_DIRECTORY, exist_ok=True)
         filepath = os.path.join(DOWNLOAD_DIRECTORY, filename)
 
-        with open(filepath, 'wb') as f:
-            last_update_time = time.time()
-            for chunk in stream_response.iter_content(chunk_size=8192):
-                f.write(chunk)
-                downloaded += len(chunk)
-                
-                current_time = time.time()
-                if total_length > 0 and (current_time - last_update_time) > 0.2:
-                    progress = (downloaded / total_length) * 100
-                    update_status(type='progress', download_id=download_id, progress=min(progress, 99))
-                    last_update_time = current_time
-                    time.sleep(0)
+        update_status(type='info', message=f"Attempting to write to: {filepath}")
+        
+        # Check if we can write to the directory
+        if not os.path.exists(DOWNLOAD_DIRECTORY):
+            update_status(type='error', message=f"Directory does not exist: {DOWNLOAD_DIRECTORY}")
+        elif not os.access(DOWNLOAD_DIRECTORY, os.W_OK):
+            update_status(type='error', message=f"Cannot write to directory: {DOWNLOAD_DIRECTORY}")
+        else:
+            update_status(type='info', message=f"Directory is writable: {DOWNLOAD_DIRECTORY}")
+            
+        try:
+            import pwd
+            import grp
+            uid = os.getuid()
+            gid = os.getgid()
+            user = pwd.getpwuid(uid).pw_name
+            group = grp.getgrgid(gid).gr_name
+            update_status(type='info', message=f"Running as user: {user}, group: {group}")
+        except Exception as e:
+            update_status(type='warning', message=f"Could not get user/group info: {e}")
+
+        try:
+            with open(filepath, 'wb') as f:
+                last_update_time = time.time()
+                for chunk in stream_response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    current_time = time.time()
+                    if total_length > 0 and (current_time - last_update_time) > 0.2:
+                        progress = (downloaded / total_length) * 100
+                        update_status(type='progress', download_id=download_id, progress=min(progress, 99))
+                        last_update_time = current_time
+                        time.sleep(0)
+        except PermissionError as pe:
+            update_status(type='error', message=f"Permission denied for file: {filepath}")
+            update_status(type='error', message=f"Error details: {str(pe)}")
+            raise
 
         _add_metadata(filepath, track)
         update_status(type='progress', download_id=download_id, progress=100)
@@ -287,7 +340,7 @@ def _get_album_tracks_with_images(album_id):
 
 @app.route('/api/qobuz-login', methods=['POST'])
 def qobuz_login():
-    """Logs into Qobuz using user credentials."""
+    """Logs into Qobuz using user credentials and saves the session."""
     if FLACCY_PASSWORD and not session.get('logged_in'):
         return jsonify({'error': 'App authentication required'}), 401
 
@@ -299,16 +352,20 @@ def qobuz_login():
         return jsonify({'error': 'Email and password are required'}), 400
 
     try:
-        # Use the direct API call instead of User.login()
         response = qobuz.api.request('user/login', username=email, password=password)
         
         if response and 'user_auth_token' in response:
-            # Extract user ID from the nested user object
             user_data = response.get('user', {})
             user_id = user_data.get('id')
+            auth_token = response['user_auth_token']
             
+            # Save session to file
+            with open('.qobuz_session', 'w') as f:
+                json.dump({'user_id': user_id, 'auth_token': auth_token}, f)
+            
+            # Also update the current Flask session
             session['qobuz_user_id'] = user_id
-            session['qobuz_auth_token'] = response['user_auth_token']
+            session['qobuz_auth_token'] = auth_token
             
             return jsonify({'success': True, 'message': 'Qobuz login successful!'})
         else:
@@ -320,9 +377,10 @@ def qobuz_login():
 @app.route('/api/check-session')
 def check_session():
     """Checks if the user is logged into the app and Qobuz."""
+    qobuz_logged_in = 'qobuz_auth_token' in session or (qobuz_session_data.get('auth_token') is not None)
     return jsonify({
         'flaccy_logged_in': session.get('logged_in', False),
-        'qobuz_logged_in': 'qobuz_auth_token' in session
+        'qobuz_logged_in': qobuz_logged_in
     })
 
 @app.route('/')
@@ -346,8 +404,13 @@ def login():
 
 @app.route('/logout')
 def logout():
+    global qobuz_session_data
     session.pop('logged_in', None)
     session.pop('qobuz_user_id', None)
+    session.pop('qobuz_auth_token', None)
+    qobuz_session_data = {}
+    if os.path.exists('.qobuz_session'):
+        os.remove('.qobuz_session')
     return redirect(url_for('login'))
 
 def track_to_dict(track_data):
@@ -499,11 +562,12 @@ def search():
 
 @app.route('/api/download-song', methods=['POST'])
 def download_song():
+    print("DEBUG: download_song called!")
     if not session.get('logged_in') and FLACCY_PASSWORD:
         return jsonify({'error': 'Authentication required.'}), 401
     
-    user_id = session.get('qobuz_user_id')
-    auth_token = session.get('qobuz_auth_token')
+    user_id = session.get('qobuz_user_id') or qobuz_session_data.get('user_id')
+    auth_token = session.get('qobuz_auth_token') or qobuz_session_data.get('auth_token')
     
     if not user_id or not auth_token:
         return jsonify({'error': 'Qobuz session expired, please log in again.'}), 401
@@ -531,8 +595,8 @@ def download_album():
     if not session.get('logged_in') and FLACCY_PASSWORD:
         return jsonify({'error': 'Authentication required.'}), 401
     
-    user_id = session.get('qobuz_user_id')
-    auth_token = session.get('qobuz_auth_token')
+    user_id = session.get('qobuz_user_id') or qobuz_session_data.get('user_id')
+    auth_token = session.get('qobuz_auth_token') or qobuz_session_data.get('auth_token')
     
     if not user_id or not auth_token:
         return jsonify({'error': 'Qobuz session expired, please log in again.'}), 401
@@ -609,8 +673,8 @@ def get_album_tracks():
 def download_playlist():
     if not session.get('logged_in') and FLACCY_PASSWORD:
         return jsonify({'error': 'Authentication required.'}), 401
-    user_id = session.get('qobuz_user_id')
-    auth_token = session.get('qobuz_auth_token')
+    user_id = session.get('qobuz_user_id') or qobuz_session_data.get('user_id')
+    auth_token = session.get('qobuz_auth_token') or qobuz_session_data.get('auth_token')
     if not user_id or not auth_token:
         return jsonify({'error': 'Qobuz session expired, please log in again.'}), 401
     if 'playlist' not in request.files:
@@ -637,10 +701,13 @@ def download_playlist():
 
 # --- Main Execution ---
 def start_workers():
+    print("DEBUG: Starting workers...")
     for _ in range(MAX_WORKERS):
         spawn(worker)
 
+load_qobuz_session()
 start_workers()
+print("DEBUG: App initialization complete")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
