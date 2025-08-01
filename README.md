@@ -78,18 +78,18 @@ cloudflared tunnel create flaccy-tunnel
 
 ### Step 4: Configure
 
-Create a config:
+Create a configuration file in your home directory:
 
 ```bash
-sudo mkdir -p /etc/cloudflared
-sudo nano /etc/cloudflared/config.yml
+mkdir -p ~/.cloudflared
+nano ~/.cloudflared/config.yml
 ```
 
-Paste:
+Paste the following configuration into the file, replacing `<TUNNEL_ID>` and `<YOUR_TUNNEL_ID>` with the ID from the previous step, and `flaccy.yourdomain.com` with your desired hostname:
 
 ```yaml
 tunnel: <TUNNEL_ID>
-credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+credentials-file: /home/brandon/.cloudflared/<YOUR_TUNNEL_ID>.json
 ingress:
   - hostname: flaccy.yourdomain.com
     service: http://localhost:5001
@@ -98,18 +98,50 @@ ingress:
 
 ### Step 5: DNS Routing
 
-In Cloudflare DNS dashboard:
+In your Cloudflare DNS dashboard, create a CNAME record:
 
-- Type: CNAME  
-- Name: `flaccy`  
-- Target: `<TUNNEL_ID>.cfargotunnel.com`
+-   **Type**: CNAME
+-   **Name**: `flaccy` (or your desired subdomain)
+-   **Target**: `<TUNNEL_ID>.cfargotunnel.com`
 
-### Step 6: Run as Service
+### Step 6: Run as a Systemd Service
+
+To ensure the tunnel runs persistently, create a systemd service file:
 
 ```bash
-sudo cloudflared service install
-sudo systemctl start cloudflared
-sudo systemctl enable cloudflared
+sudo nano /etc/systemd/system/cloudflared.service
+```
+
+Paste the following into the file. Make sure to replace `brandon` with your username if it's different.
+
+```ini
+[Unit]
+Description=Cloudflare Tunnel
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/cloudflared tunnel --config /home/brandon/.cloudflared/config.yml run
+User=brandon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Step 7: Enable and Start the Service
+
+Now, reload the systemd daemon, and enable and start the `cloudflared` service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now cloudflared.service
+```
+
+You can check the status of the service with:
+
+```bash
+sudo systemctl status cloudflared.service
 ```
 
 ---
