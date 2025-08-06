@@ -1,0 +1,11 @@
+__pycache__/
+venv
+.vscode
+.DS_Store
+.idea/
+config/
+downloads/
+temp/
+.python-version
+modules/
+extensions/

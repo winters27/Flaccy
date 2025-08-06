@@ -12,6 +12,29 @@ This workflow replicates the convenience of a commercial streaming service. You 
 
 ---
 
+## Dependencies
+
+### FFmpeg
+
+`ffmpeg` is required for processing audio files. Please install it on your system before running Flaccy.
+
+**Windows (using winget):**
+```bash
+winget install -e --id Gyan.FFmpeg
+```
+
+**macOS (using Homebrew):**
+```bash
+brew install ffmpeg
+```
+
+**Linux (using apt):**
+```bash
+sudo apt update && sudo apt install ffmpeg
+```
+
+---
+
 ## Installation with Docker
 
 This guide walks through setting up Flaccy on any system with Docker and Docker Compose.
