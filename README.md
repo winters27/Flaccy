@@ -183,6 +183,14 @@ If you are downloading music to a shared media directory (such as a Nextcloud vo
 
 ---
 
+## Credits
+
+This project would not be possible without the incredible work of the **OrfiTeam** and their `OrpheusDL` library.
+
+-   **OrpheusDL GitHub**: [https://github.com/OrfiTeam/OrpheusDL](https://github.com/OrfiTeam/OrpheusDL)
+
+---
+
 ## License
 
 This project is for personal use and research. Respect the terms of service of the music providers.
