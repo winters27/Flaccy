@@ -244,6 +244,7 @@ def download_song():
 def download_album():
     data = request.get_json()
     download_path = None
+    is_temp_dir = False
     try:
         service = data.get('service')
         module = get_module(service)
@@ -259,8 +260,13 @@ def download_album():
         album_name = album_info.name if album_info else f"album_{album_id}"
         artist_name = album_info.artist if album_info else "Unknown Artist"
         
-        download_path = os.path.join(os.getcwd(), 'downloads', str(album_id))
-        os.makedirs(download_path, exist_ok=True)
+        flaccy_mode = os.environ.get('FLACCY_MODE', 'public')
+        if flaccy_mode == 'private':
+            download_path = os.environ.get('DOWNLOAD_DIRECTORY', './downloads')
+            os.makedirs(download_path, exist_ok=True)
+        else:
+            download_path = tempfile.mkdtemp(prefix="flaccy_album_")
+            is_temp_dir = True
 
         media_to_download = {service: [MediaIdentification(media_id=album_id, media_type=DownloadTypeEnum.album)]}
         third_party_modules = construct_third_party_modules(service)
@@ -309,25 +315,30 @@ def download_album():
             update_status(session['user_id'], type='error', message=error_message)
         return jsonify({'error': 'Failed to download album.', 'details': str(e)}), 500
     finally:
-        if download_path and os.path.exists(download_path):
-            pass
+        if is_temp_dir and download_path and os.path.exists(download_path):
+            import shutil
+            shutil.rmtree(download_path)
 
 @main_bp.route('/api/download-playlist', methods=['POST'])
 def download_playlist():
     data = request.get_json()
+    download_path = None
+    is_temp_dir = False
     try:
         service = data.get('service')
         module = get_module(service)
         queries = data.get('queries', [])
         
-        # Default to ~/Downloads/Flaccy
-        download_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'Flaccy')
-
         if not queries or not isinstance(queries, list):
             return jsonify({'error': 'Invalid or missing "queries"'}), 400
 
-        if not os.path.exists(download_dir):
-            os.makedirs(download_dir)
+        flaccy_mode = os.environ.get('FLACCY_MODE', 'public')
+        if flaccy_mode == 'private':
+            download_path = os.environ.get('DOWNLOAD_DIRECTORY', './downloads')
+            os.makedirs(download_path, exist_ok=True)
+        else:
+            download_path = tempfile.mkdtemp(prefix="flaccy_playlist_")
+            is_temp_dir = True
 
         results = []
         for query in queries:
@@ -353,15 +364,35 @@ def download_playlist():
                     media_to_download=media_to_download,
                     third_party_modules=third_party_modules,
                     separate_download_module='default',
-                    output_path=download_dir
+                    output_path=download_path
                 )
 
                 results.append({'query': query, 'status': 'success'})
 
             except Exception as e:
                 results.append({'query': query, 'status': 'error', 'message': str(e)})
+        
+        if flaccy_mode == 'public':
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, _, files in os.walk(download_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, download_path)
+                        zipf.write(file_path, arcname)
+            
+            zip_buffer.seek(0)
+            zip_filename = f"playlist_{uuid.uuid4()}.zip"
+            
+            return Response(zip_buffer.getvalue(), 
+                           mimetype='application/zip', 
+                           headers={'Content-Disposition': f'attachment; filename="{zip_filename}"'})
 
         return jsonify({'results': results}), 200
 
     except Exception as e:
         return jsonify({'error': f'Failed to download playlist: {str(e)}'}), 500
+    finally:
+        if is_temp_dir and download_path and os.path.exists(download_path):
+            import shutil
+            shutil.rmtree(download_path)

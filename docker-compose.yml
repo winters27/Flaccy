@@ -6,9 +6,6 @@ services:
     container_name: flaccy
     env_file:
       - .env
-    volumes:
-      - /srv/copyparty/music/:/app/downloads
     ports:
-      - "5001:5000"
+      - "5000:5000"
     restart: unless-stopped
-    user: "${UID}:${GID}"

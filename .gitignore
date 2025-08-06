@@ -3,6 +3,9 @@
 .env.*
 !/.env.template
 
+# Docker
+docker-compose.private.yml
+
 # Virtual Environment
 venv/
 __pycache__/
