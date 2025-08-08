@@ -10,6 +10,7 @@ __pycache__/
 # Docker
 .dockerignore
 docker-compose.yml
+nginx.conf
 
 # Downloads
 downloads/
