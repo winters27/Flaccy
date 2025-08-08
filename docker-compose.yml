@@ -4,8 +4,12 @@ services:
   flaccy:
     build: .
     container_name: flaccy
+    dns:
+      - 8.8.8.8
     env_file:
       - .env
+    volumes:
+      - ./downloads:/app/downloads
     ports:
       - "5000:5000"
     restart: unless-stopped

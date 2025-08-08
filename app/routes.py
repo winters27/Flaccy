@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, Response, render_template, session
+from flask import Blueprint, request, jsonify, Response, render_template, session, send_file
 from gevent import sleep
 from gevent.pool import Pool
 import time
@@ -13,11 +13,12 @@ import uuid
 from OrpheusDL.orpheus.core import orpheus_core_download
 from OrpheusDL.utils.models import DownloadTypeEnum, MediaIdentification, CodecOptions, QualityEnum
 
-from .orpheus_handler import get_module, construct_third_party_modules, orpheus_session
+from .orpheus_handler import get_module, construct_third_party_modules, orpheus_session, initialize_modules
 
 main_bp = Blueprint('main', __name__)
 
 status_messages = {}
+modules_initialized = False
 
 def update_status(session_id, type, **kwargs):
     if session_id not in status_messages:
@@ -51,7 +52,7 @@ def status_stream():
                         yield f"id: {msg['id']}\ndata: {json.dumps(msg)}\n\n"
                         last_id = msg['id']
                 yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                time.sleep(0.3)
+                sleep(0.3)
             except GeneratorExit:
                 break
             except Exception as e:
@@ -65,6 +66,10 @@ def index():
 
 @main_bp.route('/api/search', methods=['POST'])
 def search():
+    global modules_initialized
+    if not modules_initialized:
+        initialize_modules()
+        modules_initialized = True
     data = request.get_json()
     try:
         service = data.get('service')
@@ -223,10 +228,13 @@ def download_song():
         
         update_status(session.get('user_id'), type='success', message=f"Completed: {filename}")
         
-        return Response(
-            file_content,
+        file_stream = BytesIO(file_content)
+        file_stream.seek(0)
+        return send_file(
+            file_stream,
             mimetype='audio/flac',
-            headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+            as_attachment=True,
+            download_name=filename
         )
         
     except Exception as e:

@@ -9,8 +9,12 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY OrpheusDL /app/OrpheusDL
+COPY app /app/app
+COPY run.py /app/
+COPY gunicorn.conf.py /app/
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--workers=3", "--worker-class=gevent", "--bind=0.0.0.0:5000", "run:app"]
+# Use sync workers instead of gevent for better threading compatibility
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "run:app"]

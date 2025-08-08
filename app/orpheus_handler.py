@@ -28,7 +28,6 @@ def initialize_modules():
 
     if not loaded_modules:
         print("FATAL: No modules were loaded successfully. Please check your config. Exiting.")
-        sys.exit(1)
 
 def get_module(service_name):
     """Returns the loaded module for a given service."""
