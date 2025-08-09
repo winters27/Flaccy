@@ -1,143 +1,184 @@
-# Flaccy Web
 
-Flaccy is a sleek, self-hosted web application for downloading high-quality music from multiple services. It is designed to integrate seamlessly with your home media server, allowing you to expand your personal music library from anywhere.
 
-### Key Features
+# Flaccy
 
-- **Multi-Service Support**: Download from both **Tidal** and **Qobuz**.
-- **Modern Web UI**: A clean, responsive interface for searching, downloading, and managing your music.
-- **Real-Time Progress**: Track download progress in real-time with toast notifications.
-- **Playlist Support**: Upload a playlist file and let Flaccy handle the rest.
-- **Dockerized**: Easy to deploy and manage with Docker and Docker Compose.
-- **Secure Remote Access**: Includes instructions for setting up secure remote access with Cloudflare Tunnel.
+*A self‑hosted web frontend that lets you search streaming catalogs and pull lossless files straight into your home music library.*
 
-### Purpose and Use Case
-
-Flaccy was developed to make it easy to download lossless and high-resolution music directly to a home server's music collection from anywhere.
-
-When used in combination with a home-hosted music server such as **Roon**, **Navidrome**, **Jellyfin**, or **Plex**, which monitors a shared directory, Flaccy allows you to remotely request a track or album and have it appear in your library almost instantly. As long as your media server is set to periodically rescan its music directory, the new files will be picked up and indexed automatically.
-
-This workflow replicates the convenience of a commercial streaming service. You request a song, and moments later it becomes available in your own personal music library—fully lossless and privately hosted.
+> **One‑liner:** Add tracks from anywhere and have them appear in your library moments later.
 
 ---
 
-## Dependencies
+## Why Flaccy?
 
-### FFmpeg
+Commercial streaming is convenient, but your own library is forever. Flaccy bridges the gap by providing a clean web UI and automation around a downloader so you can request albums/tracks/playlists remotely and have them land in the folder your media server watches.
 
-`ffmpeg` is required for processing audio files. Please install it on your system before running Flaccy.
+---
 
-**Windows (using winget):**
+## Features
+
+- **Search & add** albums, tracks, and playlists from supported services.
+- **Real‑time progress** with status toasts and a live queue.
+- **Playlist ingest** (upload a file and let Flaccy fetch everything).
+- **Docker‑first deployment** with sample `docker-compose.yml` and Nginx config.
+- **Remote‑friendly**: works great behind Cloudflare Tunnel / any reverse proxy.
+
+---
+
+## Supported services
+
+- **Qobuz** (stable)
+- **Tidal** (stable)
+- **KKBox** (stable)
+- **Any OrpheusDL module** — drop in the module and set credentials to extend support.
+
+---
+
+## Quick start (Docker)
+
+> Requires **Docker** and **Docker Compose**, plus **FFmpeg** on the host.
+
 ```bash
-winget install -e --id Gyan.FFmpeg
+# 1) Clone
+git clone https://github.com/winters27/flaccy.git
+cd flaccy
+
+# 2) Create your env file
+cp .env.template .env
+# then edit .env with your credentials
+
+# 3) Bring it up
+docker compose up --build -d
+
+# 4) Open the UI
+# http://localhost:5000 (or your reverse-proxied hostname)
 ```
 
-**macOS (using Homebrew):**
-```bash
-brew install ffmpeg
-```
+### Environment variables
 
-**Linux (using apt):**
+Copy `.env.template` to `.env` and set as needed:
+
+- `QOBUZ_EMAIL`, `QOBUZ_PASSWORD`, `QOBUZ_APP_ID`, `QOBUZ_APP_SECRET`
+- `TIDAL_USER`, `TIDAL_PASS`
+- `KKBOX_EMAIL`, `KKBOX_PASSWORD` *(or relevant module vars)*
+- `MUSIC_DIR` – absolute path inside the container where downloaded files are written
+- `WORKERS` – Gunicorn worker count
+- `SECRET_KEY` – session/signing key for the web app
+
+---
+
+## Volumes & ports (compose)
+
+The provided `docker-compose.yml` exposes port **5000** by default and mounts `./downloads` to the container’s music directory. Adjust paths/ports to taste.
+
+---
+
+## Local development
+
 ```bash
-sudo apt update && sudo apt install ffmpeg
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+python run.py
+# UI at http://localhost:5000
 ```
 
 ---
 
-## Installation with Docker
+## Reverse proxy (optional)
 
-This guide walks through setting up Flaccy on any system with Docker and Docker Compose.
+A sample `nginx.conf` is included. Point your proxy at the app’s upstream (port 5000). Make sure to forward `X-Forwarded-*` headers and set sensible timeouts for long downloads.
 
-### Step 1: Clone the Repository
+### Using Cloudflare with Flaccy
+
+If you want to expose Flaccy securely via Cloudflare:
+
+1. **Generate Cloudflare Origin Certificates (.pem files)** for the domain you want to use.
+   - In the Cloudflare dashboard, navigate to **SSL/TLS > Origin Server > Create Certificate**.
+   - Select “Let Cloudflare generate a private key and CSR” and download both the certificate and private key.
+2. On the **host machine**, create the directory for the keys:
 
 ```bash
-git clone https://github.com/winters27/Flaccy.git
-cd Flaccy
+sudo mkdir -p /etc/ssl/cf_origin
 ```
 
-### Step 2: Configure Environment
+3. Place the downloaded files into:
 
-1.  **Create the environment file:**
-    Copy the template to a new `.env` file:
-    ```bash
-    cp .env.template .env
-    ```
+```bash
+/etc/ssl/cf_origin/fullchain.pem
+/etc/ssl/cf_origin/privkey.pem
+```
 
-2.  **Edit the `.env` file:**
-    Open the `.env` file in a text editor and configure the following variables with your credentials for the services you want to use:
-    - `QOBUZ_EMAIL`
-    - `QOBUZ_PASSWORD`
-    - `QOBUZ_APP_ID`
-    - `QOBUZ_APP_SECRET`
-    - `TIDAL_USER`
-    - `TIDAL_PASS`
+These paths match the defaults in the provided `nginx.conf`:
+
+```
+ssl_certificate /etc/ssl/cf_origin/fullchain.pem;
+ssl_certificate_key /etc/ssl/cf_origin/privkey.pem;
+```
+
+4. Update your reverse proxy config (if needed) to reference these paths.
+5. In your Cloudflare dashboard, create an **A record** for your domain pointing to the public IPv4 address of the host machine.
+
+These steps are required for Cloudflare’s SSL and DNS to work correctly with your self‑hosted reverse proxy.
 
 ---
 
-## Running Flaccy
+## How it fits together
 
-To run Flaccy, simply use Docker Compose:
-
-```bash
-docker-compose up --build -d
+```
+[Browser]
+   ⇅
+[Flaccy Web UI] — REST calls — [Download worker (OrpheusDL + modules)]
+                                  │
+                                  └── writes → [MUSIC_DIR] (host mount)
 ```
 
-The application will be available at `http://localhost:5000`.
-
-### Local Development
-
-For local development, you can run the application without Docker:
-
-1.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-2.  **Run the application:**
-    ```bash
-    python run.py
-    ```
-
-The application will be available at `http://localhost:5000`.
-
-### Reverse Proxy with Nginx
-
-For production deployments, it is recommended to use a reverse proxy like Nginx. A sample `nginx.conf` is provided in the repository.
-
-1.  **Install Nginx:**
-    ```bash
-    sudo apt update && sudo apt install nginx
-    ```
-
-2.  **Configure Nginx:**
-    Copy the provided `nginx.conf` to `/etc/nginx/nginx.conf`:
-    ```bash
-    sudo cp nginx.conf /etc/nginx/nginx.conf
-    ```
-
-3.  **Enable and start Nginx:**
-    ```bash
-    sudo systemctl enable --now nginx
-    ```
-
-The application will be available at your server's IP address or domain name.
+- The UI requests a job; the worker fetches audio + tags via OrpheusDL modules (Qobuz/Tidal/KKBox/etc.), converts if needed with FFmpeg, and writes to `MUSIC_DIR`.
+- Your media server scans that folder and the new music appears.
 
 ---
 
-## Permissions Note
+## Permissions & storage
 
-If you are downloading music to a shared media directory (such as a Nextcloud volume or mounted drive), ensure that the target directory is writable by the user running the Docker container.
+If `MUSIC_DIR` is a bind mount (e.g., a NAS, Nextcloud volume, or external drive), ensure the UID/GID used by the container can write to it.
+
+---
+
+## Security notes
+
+- Keep the app behind authentication (reverse proxy auth, VPN, or Cloudflare Access).
+- Treat your `.env` like a password vault; never commit it.
+- Respect providers’ terms of service and your local laws.
+
+---
+
+## Screenshots
+
+> 
+
+---
+
+## Roadmap
+
+-
+
+---
+
+## Troubleshooting
+
+- **Nothing shows up in my library** → verify your media server watches `MUSIC_DIR`.
+- **Permissions error on write** → check container user vs. host folder ownership.
+- **Stuck jobs** → restart just the worker or the stack.
+- **FFmpeg not found** → ensure FFmpeg is installed on the host.
 
 ---
 
 ## Credits
 
-This project would not be possible without the incredible work of the **OrfiTeam** and their `OrpheusDL` library.
-
--   **OrpheusDL GitHub**: [https://github.com/OrfiTeam/OrpheusDL](https://github.com/OrfiTeam/OrpheusDL)
+Built on the excellent **OrpheusDL** project and its modules.
 
 ---
 
 ## License
 
-This project is for personal use and research. Respect the terms of service of the music providers.
+This project is licensed under the [MIT License](LICENSE).
+
