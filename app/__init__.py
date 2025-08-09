@@ -20,7 +20,11 @@ def create_app():
     artifacts_dir = os.environ.get('ARTIFACTS_DIR') or os.path.join(app.instance_path, 'artifacts')
     os.makedirs(artifacts_dir, exist_ok=True)
     app.config['ARTIFACTS_DIR'] = artifacts_dir
-    app.config['X_ACCEL_REDIRECT_PREFIX'] = os.environ.get('X_ACCEL_REDIRECT_PREFIX')
+    
+    # Use X-Accel-Redirect when the env var is 'true', otherwise False.
+    use_x_accel = os.environ.get('USE_X_ACCEL_REDIRECT', 'false').lower() == 'true'
+    app.config['USE_X_ACCEL_REDIRECT'] = use_x_accel
+    
     # Optional owner for artifacts (set via env to control file ownership, e.g. 1000)
     owner_uid = os.environ.get('ARTIFACTS_OWNER_UID')
     owner_gid = os.environ.get('ARTIFACTS_OWNER_GID')

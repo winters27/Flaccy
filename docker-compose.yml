@@ -11,6 +11,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=sqlite:////app/instance/flaccy.db
+      - USE_X_ACCEL_REDIRECT=true
     volumes:
       - ./:/app
       - ./instance:/app/instance

@@ -355,15 +355,21 @@ def get_file(filename):
         # If anything goes wrong, fall back to the safe filename
         display_name = safe_name
 
-    internal_redirect_path = f'/internal/artifacts/{safe_name}'
-    response = Response(status=200)
-    response.headers['X-Accel-Redirect'] = internal_redirect_path
-    # Nginx will handle Content-Type, so we don't set it here.
-    # Suggest a user-friendly filename to the browser via Content-Disposition.
-    # Use basic quoting; for full UTF-8 support we could add filename* if needed.
-    response.headers['Content-Disposition'] = f'attachment; filename="{display_name}"'
-    
-    return response
+    # If configured to use Nginx's X-Accel-Redirect, send the redirect header.
+    # Otherwise, serve the file directly with Flask's send_file.
+    if current_app.config.get('USE_X_ACCEL_REDIRECT', False):
+        internal_redirect_path = f'/internal/artifacts/{safe_name}'
+        response = Response(status=200)
+        response.headers['X-Accel-Redirect'] = internal_redirect_path
+        response.headers['Content-Disposition'] = f'attachment; filename="{display_name}"'
+        return response
+    else:
+        # Fallback for development: serve the file directly from the filesystem.
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=display_name
+        )
 
 
 @main_bp.route('/files/<filename>/sign', methods=['POST'])
