@@ -14,6 +14,13 @@ from OrpheusDL.orpheus.core import orpheus_core_download
 from OrpheusDL.utils.models import DownloadTypeEnum, MediaIdentification, CodecOptions, QualityEnum
 
 from .orpheus_handler import get_module, construct_third_party_modules, orpheus_session, initialize_modules
+from . import db
+from .models import Job, JobStatus
+from .tasks import download_task
+from . import events
+from . import files as files_module
+from flask import current_app
+from rq import Queue
 
 main_bp = Blueprint('main', __name__)
 
@@ -174,233 +181,221 @@ def search():
             update_status(session['user_id'], type='error', message=error_message)
         return jsonify({'error': error_message}), 500
 
-@main_bp.route('/api/download-song', methods=['POST'])
-def download_song():
+
+
+@main_bp.route('/jobs', methods=['POST'])
+def create_job():
     data = request.get_json()
-    download_path = None
-    try:
-        service = data.get('service')
-        module = get_module(service)
-        track_data = data.get('track')
-        if not track_data or not track_data.get('id'):
-            return jsonify({'error': 'Invalid track data provided.'}), 400
-        
-        track_id = track_data['id']
-        session_id = session.get('user_id')
-        update_status(session_id, type='info', message=f"Starting download for track ID: {track_id} from {service}", track_id=track_id)
+    source = data.get('source')
+    options = data.get('options')
+    current_app.logger.info("Received job request", data=data)
 
-        def progress_callback(current, total):
-            update_status(session_id, type='download_progress', track_id=track_id, current=current, total=total)
-            sleep(0) # Yield to other greenlets
+    if not source:
+        current_app.logger.error("Job request missing source", data=data)
+        return jsonify({'error': 'Missing source'}), 400
 
-        download_path = tempfile.mkdtemp(prefix="flaccy_")
-        
-        media_to_download = {service: [MediaIdentification(media_id=track_id, media_type=DownloadTypeEnum.track)]}
-        third_party_modules = construct_third_party_modules(service)
-        
-        orpheus_core_download(
-            orpheus_session=orpheus_session,
-            media_to_download=media_to_download,
-            third_party_modules=third_party_modules,
-            separate_download_module=None,
-            output_path=download_path,
-            progress_callback=progress_callback
-        )
+    job_id = str(uuid.uuid4())
+    new_job = Job(
+        id=job_id,
+        status=JobStatus.QUEUED,
+        input={'source': source, 'options': options}
+    )
+    db.session.add(new_job)
+    db.session.commit()
+    current_app.logger.info("Created new job", job_id=job_id)
 
-        time.sleep(0.5)
+    q = Queue(connection=current_app.redis)
+    # Enqueue with extended job timeout to allow zipping large albums (600s)
+    q.enqueue(download_task, new_job.id, job_timeout=600)
+    current_app.logger.info("Enqueued job", job_id=job_id, job_timeout=600)
 
-        all_files = []
-        for root, dirs, files in os.walk(download_path):
-            for file in files:
-                all_files.append(os.path.join(root, file))
+    return jsonify({'id': new_job.id, 'status': new_job.status.value}), 201
 
-        if not all_files:
-            raise Exception("No files were downloaded")
+@main_bp.route('/jobs/<job_id>', methods=['GET'])
+def get_job(job_id):
+    job = Job.query.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
 
-        audio_file_path = all_files[0]
-        filename = os.path.basename(audio_file_path)
-        
-        with open(audio_file_path, 'rb') as f:
-            file_content = f.read()
-        
-        import shutil
-        shutil.rmtree(download_path)
-        
-        update_status(session.get('user_id'), type='success', message=f"Completed: {filename}")
-        
-        file_stream = BytesIO(file_content)
-        file_stream.seek(0)
-        return send_file(
-            file_stream,
-            mimetype='audio/flac',
-            as_attachment=True,
-            download_name=filename
-        )
-        
-    except Exception as e:
-        error_msg = f"Failed to download song: {str(e)}"
-        if 'user_id' in session:
-            update_status(session['user_id'], type='error', message=error_msg)
-        return jsonify({'error': error_msg}), 500
-        
-    finally:
-        if download_path and os.path.exists(download_path):
-            import shutil
-            shutil.rmtree(download_path)
+    return jsonify({
+        'id': job.id,
+        'status': job.status.value,
+        'progress': job.progress,
+        'step': job.step,
+        'error': job.error,
+        'result': job.result
+    })
 
-@main_bp.route('/api/download-album', methods=['POST'])
-def download_album():
-    data = request.get_json()
-    download_path = None
-    is_temp_dir = False
-    try:
-        service = data.get('service')
-        module = get_module(service)
-        album_id = data.get('album_id')
-        
-        if not album_id:
-            return jsonify({'error': 'Invalid album ID provided.'}), 400
+@main_bp.route('/jobs/<job_id>/events', methods=['GET'])
+def job_events(job_id):
+    """
+    Per-job SSE stream. Clients may provide ?last_id=N to only receive events after that id.
+    Heartbeats are sent every ~15s to keep proxies from closing the connection.
+    """
+    # Read request args while we're still inside the request context so the generator
+    # doesn't attempt to access request.* later when the context may be gone.
+    last_id = int(request.args.get('last_id', -1))
 
-        session_id = session.get('user_id')
-        update_status(session_id, type='info', message=f"Starting download for album ID: {album_id} from {service}")
-        
-        album_info = module.get_album_info(album_id)
-        album_name = album_info.name if album_info else f"album_{album_id}"
-        artist_name = album_info.artist if album_info else "Unknown Artist"
-        
-        flaccy_mode = os.environ.get('FLACCY_MODE', 'public')
-        if flaccy_mode == 'private':
-            download_path = os.environ.get('DOWNLOAD_DIRECTORY', './downloads')
-            os.makedirs(download_path, exist_ok=True)
-        else:
-            download_path = tempfile.mkdtemp(prefix="flaccy_album_")
-            is_temp_dir = True
-
-        media_to_download = {service: [MediaIdentification(media_id=album_id, media_type=DownloadTypeEnum.album)]}
-        third_party_modules = construct_third_party_modules(service)
-        
-        orpheus_core_download(
-            orpheus_session=orpheus_session,
-            media_to_download=media_to_download,
-            third_party_modules=third_party_modules,
-            separate_download_module='default',
-            output_path=download_path
-        )
-
-        album_folder_path = None
-        for item in os.listdir(download_path):
-            item_path = os.path.join(download_path, item)
-            if os.path.isdir(item_path):
-                album_folder_path = item_path
-                break
-        
-        if not album_folder_path:
-            raise Exception("Could not find downloaded album folder.")
-
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, _, files in os.walk(album_folder_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, album_folder_path)
-                    zipf.write(file_path, arcname)
-        
-        zip_buffer.seek(0)
-        
-        safe_album_title = re.sub(r'[<>:"/\\|?*]', '', album_name)
-        safe_artist_name = re.sub(r'[<>:"/\\|?*]', '', artist_name)
-        zip_filename = f"{safe_artist_name} - {safe_album_title}.zip"
-
-        update_status(session.get('user_id'), type='success', message=f"Completed album: {album_name}")
-        
-        return Response(zip_buffer.getvalue(), 
-                       mimetype='application/zip', 
-                       headers={'Content-Disposition': f'attachment; filename="{zip_filename}"'})
-                       
-    except Exception as e:
-        error_message = f"Failed to download album: {str(e)}"
-        if 'user_id' in session:
-            update_status(session['user_id'], type='error', message=error_message)
-        return jsonify({'error': 'Failed to download album.', 'details': str(e)}), 500
-    finally:
-        if is_temp_dir and download_path and os.path.exists(download_path):
-            import shutil
-            shutil.rmtree(download_path)
-
-@main_bp.route('/api/download-playlist', methods=['POST'])
-def download_playlist():
-    data = request.get_json()
-    download_path = None
-    is_temp_dir = False
-    try:
-        service = data.get('service')
-        module = get_module(service)
-        queries = data.get('queries', [])
-        
-        if not queries or not isinstance(queries, list):
-            return jsonify({'error': 'Invalid or missing "queries"'}), 400
-
-        flaccy_mode = os.environ.get('FLACCY_MODE', 'public')
-        if flaccy_mode == 'private':
-            download_path = os.environ.get('DOWNLOAD_DIRECTORY', './downloads')
-            os.makedirs(download_path, exist_ok=True)
-        else:
-            download_path = tempfile.mkdtemp(prefix="flaccy_playlist_")
-            is_temp_dir = True
-
-        results = []
-        for query in queries:
+    def event_stream():
+        nonlocal last_id
+        while True:
             try:
-                artist, title = [x.strip() for x in query.split('-', 1)]
-                search_results = module.search(
-                    query_type=DownloadTypeEnum.track,
-                    query=title,
-                    limit=5,
-                    offset=0
-                )
-                track = next((t for t in search_results if artist.lower() in [a.lower() for a in t.artists]), None)
-
-                if not track:
-                    results.append({'query': query, 'status': 'not found'})
-                    continue
-
-                media_to_download = {service: [MediaIdentification(media_id=track.result_id, media_type=DownloadTypeEnum.track)]}
-                third_party_modules = construct_third_party_modules(service)
-                
-                orpheus_core_download(
-                    orpheus_session=orpheus_session,
-                    media_to_download=media_to_download,
-                    third_party_modules=third_party_modules,
-                    separate_download_module='default',
-                    output_path=download_path
-                )
-
-                results.append({'query': query, 'status': 'success'})
-
+                evs = events.get_events(job_id, last_id)
+                for ev in evs:
+                    yield f"id: {ev['id']}\ndata: {json.dumps(ev)}\n\n"
+                    last_id = ev['id']
+                # heartbeat
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                sleep(15)
+            except GeneratorExit:
+                break
             except Exception as e:
-                results.append({'query': query, 'status': 'error', 'message': str(e)})
-        
-        if flaccy_mode == 'public':
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for root, _, files in os.walk(download_path):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, download_path)
-                        zipf.write(file_path, arcname)
-            
-            zip_buffer.seek(0)
-            zip_filename = f"playlist_{uuid.uuid4()}.zip"
-            
-            return Response(zip_buffer.getvalue(), 
-                           mimetype='application/zip', 
-                           headers={'Content-Disposition': f'attachment; filename="{zip_filename}"'})
+                current_app.logger.error("SSE error", error=str(e))
+                break
+    return Response(event_stream(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'})
 
-        return jsonify({'results': results}), 200
-
+@main_bp.route('/api/health', methods=['GET'])
+def health():
+    """
+    Health endpoint that checks DB connectivity, Redis connectivity, and artifacts directory writability.
+    Returns 200 when all checks pass, otherwise 503.
+    """
+    checks = {'db': False, 'redis': False, 'artifacts': False}
+    # DB check
+    try:
+        # Use SQLAlchemy text() for literal SQL in modern SQLAlchemy versions
+        from sqlalchemy import text
+        db.session.execute(text('SELECT 1'))
+        checks['db'] = True
     except Exception as e:
-        return jsonify({'error': f'Failed to download playlist: {str(e)}'}), 500
-    finally:
-        if is_temp_dir and download_path and os.path.exists(download_path):
-            import shutil
-            shutil.rmtree(download_path)
+        current_app.logger.error("DB health check failed", error=str(e))
+
+    # Redis check
+    try:
+        current_app.redis.ping()
+        checks['redis'] = True
+    except Exception as e:
+        current_app.logger.error("Redis health check failed", error=str(e))
+
+    # Artifacts directory writable check
+    try:
+        artifacts_dir = current_app.config.get('ARTIFACTS_DIR') or os.path.join(current_app.instance_path, 'artifacts')
+        os.makedirs(artifacts_dir, exist_ok=True)
+        test_path = os.path.join(artifacts_dir, '.healthcheck')
+        with open(test_path, 'w') as f:
+            f.write('ok')
+        os.remove(test_path)
+        checks['artifacts'] = True
+    except Exception as e:
+        current_app.logger.error("Artifacts dir health check failed", error=str(e))
+
+    overall_ok = all(checks.values())
+    status_code = 200 if overall_ok else 503
+    return jsonify({'status': 'ok' if overall_ok else 'degraded', 'checks': checks}), status_code
+
+@main_bp.route('/files/<filename>', methods=['GET'])
+def get_file(filename):
+    """
+    Serve artifacts from the instance/artifacts directory via Nginx's X-Accel-Redirect.
+
+    Access rules:
+      - If a valid signed token is provided via ?token=..., serve the file (anonymous signed link).
+      - Otherwise, only serve when the filename exists in a job's result manifest (authenticated flow).
+    """
+    token = request.args.get('token')
+    # Prevent path traversal by taking the basename
+    safe_name = os.path.basename(filename)
+    
+    # Check if file exists physically
+    artifacts_dir = current_app.config.get('ARTIFACTS_DIR') or os.path.join(current_app.instance_path, 'artifacts')
+    file_path = os.path.join(artifacts_dir, safe_name)
+    if not os.path.isfile(file_path):
+        return jsonify({'error': 'File not found'}), 404
+
+    # Authorization logic
+    allowed = False
+    if token:
+        payload = files_module.verify_signed_token(token)
+        if payload and payload.get('filename') == safe_name:
+            allowed = True
+    else:
+        # No token: require the filename appears in a job manifest
+        try:
+            jobs = Job.query.filter(Job.result != None).all()
+            for j in jobs:
+                if not j.result: continue
+                files = j.result.get('files', [])
+                if any(f.get('filename') == safe_name for f in files):
+                    allowed = True
+                    break
+        except Exception:
+            # On DB errors, be conservative
+            allowed = False
+
+    if not allowed:
+        return jsonify({'error': 'Access denied'}), 403
+
+    # If allowed, send the redirect header to Nginx.
+    # Prefer to suggest the original filename to the browser (for a nicer download name)
+    # while still using the safe stored filename for on-disk storage and internal redirect.
+    display_name = safe_name
+    try:
+        # Try to find the original display name from job manifests
+        jobs = Job.query.filter(Job.result != None).all()
+        for j in jobs:
+            if not j.result:
+                continue
+            for f in j.result.get('files', []):
+                if f.get('filename') == safe_name:
+                    display_name = f.get('name') or safe_name
+                    break
+            if display_name != safe_name:
+                break
+    except Exception:
+        # If anything goes wrong, fall back to the safe filename
+        display_name = safe_name
+
+    internal_redirect_path = f'/internal/artifacts/{safe_name}'
+    response = Response(status=200)
+    response.headers['X-Accel-Redirect'] = internal_redirect_path
+    # Nginx will handle Content-Type, so we don't set it here.
+    # Suggest a user-friendly filename to the browser via Content-Disposition.
+    # Use basic quoting; for full UTF-8 support we could add filename* if needed.
+    response.headers['Content-Disposition'] = f'attachment; filename="{display_name}"'
+    
+    return response
+
+
+@main_bp.route('/files/<filename>/sign', methods=['POST'])
+def sign_file(filename):
+    """
+    Return a signed URL for a given stored filename. Body may include {"ttl": seconds}.
+    The filename must be present in some job's result manifest.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    ttl = int(data.get('ttl', 1800))  # default 30 minutes
+
+    safe_name = os.path.basename(filename)
+
+    # Validate filename exists in a job manifest
+    allowed = False
+    try:
+        jobs = Job.query.filter(Job.result != None).all()
+        for j in jobs:
+            if not j.result:
+                continue
+            files = j.result.get('files', [])
+            for f in files:
+                if f.get('filename') == safe_name:
+                    allowed = True
+                    break
+            if allowed:
+                break
+    except Exception:
+        allowed = False
+
+    if not allowed:
+        return jsonify({'error': 'File not found or not allowed to be signed'}), 404
+
+    signed_url = files_module.get_signed_url_for(safe_name, ttl_seconds=ttl, host_url=None)
+    return jsonify({'signed_url': signed_url, 'ttl': ttl})

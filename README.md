@@ -84,96 +84,43 @@ docker-compose up --build -d
 
 The application will be available at `http://localhost:5000`.
 
----
+### Local Development
 
-## Secure Access with Cloudflare Tunnel
+For local development, you can run the application without Docker:
 
-For secure remote access, you can use Cloudflare Tunnel.
+1.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-### Step 1: Install cloudflared
+2.  **Run the application:**
+    ```bash
+    python run.py
+    ```
 
-Follow the official install guide:
-https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+The application will be available at `http://localhost:5000`.
 
-### Step 2: Authenticate
+### Reverse Proxy with Nginx
 
-```bash
-cloudflared tunnel login
-```
+For production deployments, it is recommended to use a reverse proxy like Nginx. A sample `nginx.conf` is provided in the repository.
 
-### Step 3: Create a Tunnel
+1.  **Install Nginx:**
+    ```bash
+    sudo apt update && sudo apt install nginx
+    ```
 
-```bash
-cloudflared tunnel create flaccy-tunnel
-```
+2.  **Configure Nginx:**
+    Copy the provided `nginx.conf` to `/etc/nginx/nginx.conf`:
+    ```bash
+    sudo cp nginx.conf /etc/nginx/nginx.conf
+    ```
 
-### Step 4: Configure
+3.  **Enable and start Nginx:**
+    ```bash
+    sudo systemctl enable --now nginx
+    ```
 
-Create a configuration file in your home directory:
-
-```bash
-mkdir -p ~/.cloudflared
-nano ~/.cloudflared/config.yml
-```
-
-Paste the following configuration into the file, replacing `<TUNNEL_ID>` and `<YOUR_TUNNEL_ID>` with the ID from the previous step, and `flaccy.yourdomain.com` with your desired hostname:
-
-```yaml
-tunnel: <TUNNEL_ID>
-credentials-file: /home/brandon/.cloudflared/<YOUR_TUNNEL_ID>.json
-ingress:
-  - hostname: flaccy.yourdomain.com
-    service: http://localhost:5000
-  - service: http_status:404
-```
-
-### Step 5: DNS Routing
-
-In your Cloudflare DNS dashboard, create a CNAME record:
-
--   **Type**: CNAME
--   **Name**: `flaccy` (or your desired subdomain)
--   **Target**: `<TUNNEL_ID>.cfargotunnel.com`
-
-### Step 6: Run as a Systemd Service
-
-To ensure the tunnel runs persistently, create a systemd service file:
-
-```bash
-sudo nano /etc/systemd/system/cloudflared.service
-```
-
-Paste the following into the file. Make sure to replace `brandon` with your username if it's different.
-
-```ini
-[Unit]
-Description=Cloudflare Tunnel
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/cloudflared tunnel --config /home/brandon/.cloudflared/config.yml run
-User=brandon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Step 7: Enable and Start the Service
-
-Now, reload the systemd daemon, and enable and start the `cloudflared` service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now cloudflared.service
-```
-
-You can check the status of the service with:
-
-```bash
-sudo systemctl status cloudflared.service
-```
+The application will be available at your server's IP address or domain name.
 
 ---
 

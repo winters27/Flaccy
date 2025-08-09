@@ -4,16 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Flaccy</title>
-    <link rel="stylesheet" href="style.css?v=1.2">
-    <link rel="icon" type="image/png" sizes="16x16" href="./flaccy.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="./flaccy.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="./flaccy.png">
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}?v=1.4">
+<link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='flaccy.png') }}">
+<link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='flaccy.png') }}">
+<link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='flaccy.png') }}">
 </head>
 <body>
-    <div class="main-container">
-        <div class="title-bar">
-            <div class="title-bar-content">
-                <img src="./flaccy.png" alt="Flaccy" class="logo" onerror="this.style.display='none'">
+<div class="main-container">
+<div class="title-bar">
+<div class="title-bar-content">
+<img src="{{ url_for('static', filename='flaccy.png') }}" alt="Flaccy" class="logo" onerror="this.style.display='none'">
                 <h1>Flaccy</h1>
             </div>
         </div>

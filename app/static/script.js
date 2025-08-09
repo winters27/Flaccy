@@ -66,6 +66,7 @@ function createToast(downloadId, trackInfo) {
         <div class="toast-content">
             <div class="toast-track-title" title="${trackInfo.title}">${trackInfo.title}</div>
             <div class="toast-track-details" title="${trackInfo.artist} - ${trackInfo.album}">${trackInfo.artist} - ${trackInfo.album}</div>
+            <div class="toast-step" aria-hidden="true"></div>
             <div class="toast-progress-bar-container">
                 <div class="toast-progress-bar"></div>
             </div>
@@ -487,70 +488,190 @@ function displaySearchResults(results, append = false) {
     }
 }
 
-function setupEventSource() {
-    if (eventSource) {
-        eventSource.close();
-    }
-    
-    eventSource = new EventSource("/api/status");
+function pollJobStatus(jobId) {
+    const interval = setInterval(() => {
+        fetch(`/jobs/${jobId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
 
-    eventSource.onmessage = function(event) {
-        const data = JSON.parse(event.data);
+                updateToastProgress(jobId, data.progress);
 
-        switch (data.type) {
-            case 'info':
-                if (data.track_id) {
-                    const downloadId = `track-${data.track_id}`;
-                    if (!activeToasts.has(downloadId)) {
-                        // This is a new download starting
-                        const trackInfo = { title: 'Starting Download...', artist: '', album: '' };
-                        createToast(downloadId, trackInfo);
+                if (data.status === 'succeeded' || data.status === 'failed' || data.status === 'canceled') {
+                    clearInterval(interval);
+                    // Close any SSE subscription for this job if present
+                    try {
+                        if (window.jobEventSources && window.jobEventSources.has(jobId)) {
+                            const es = window.jobEventSources.get(jobId);
+                            try { es.close(); } catch (e) {}
+                            window.jobEventSources.delete(jobId);
+                        }
+                    } catch (e) {}
+
+                    if (data.status === 'succeeded') {
+                        // Use the stored safe filename (filename) rather than the original display name.
+                        // The backend stores files as { name: orig_name, filename: safe_stored_name }.
+                        const storedFilename = data.result && data.result.files && data.result.files[0] && data.result.files[0].filename;
+                        if (storedFilename) {
+                            // Redirect to the app's files endpoint which will authorize the request
+                            // and instruct Nginx to serve the file via X-Accel-Redirect.
+                            window.location.href = `/files/${encodeURIComponent(storedFilename)}`;
+                        } else {
+                            logMessage('Download succeeded but no stored filename found.', 'error');
+                            createErrorToast('Download succeeded but file metadata is missing.');
+                        }
+                    } else if (data.status === 'failed') {
+                        const toastData = activeToasts.get(jobId);
+                        if (toastData) {
+                            toastData.element.classList.add('error-toast');
+                        }
+                        logMessage(`Download failed: ${data.error}`, 'error');
+                        createErrorToast(`Download failed: ${data.error}`);
                     }
                 }
-                logMessage(data.message, data.type);
-                break;
-            case 'success':
-            case 'error':
-                logMessage(data.message, data.type);
-                break;
-            case 'download_progress':
-                const { track_id, current, total } = data;
-                const progress = (current / total) * 100;
-                updateToastProgress(`track-${track_id}`, progress);
-                break;
-            case 'album_progress':
-                const { album_id, current: album_current, total: album_total, album_name } = data;
-                const downloadId = `album-${album_id}`;
-                
-                if (!activeToasts.has(downloadId)) {
-                    const albumInfo = {
-                        title: album_name,
-                        artist: '', // Artist info isn't in the progress event, but the toast needs it
-                        album: '',
-                        albumArtUrl: '' // Same for album art
-                    };
-                    createSimpleToast(downloadId, albumInfo, `Downloading ${album_current}/${album_total}`);
-                } else {
-                    updateSimpleToast(downloadId, `Downloading ${album_current}/${album_total}`);
+            })
+            .catch(error => {
+                clearInterval(interval);
+                logMessage(`Error polling job status: ${error.message}`, 'error');
+                createErrorToast(`Error polling job status: ${error.message}`);
+            });
+    }, 2000);
+}
+
+// Map of active EventSource objects per job id (to avoid duplicate subscriptions)
+window.jobEventSources = window.jobEventSources || new Map();
+
+function subscribeToJobEvents(jobId) {
+    // Avoid double-subscription
+    if (window.jobEventSources.has(jobId)) return;
+
+    try {
+        const es = new EventSource(`/jobs/${jobId}/events`);
+        es.onmessage = (e) => {
+    try {
+        const payload = JSON.parse(e.data);
+        const type = payload.type;
+
+        // Primary: server-mapped progress (preferred). Backend now sends mapped progress for albums (0..90 during download,
+        // then zipping moves to 90..95 and completion to 100). Use this when present.
+        if (type === 'progress' && typeof payload.progress !== 'undefined') {
+            updateToastProgress(jobId, payload.progress);
+            // Optionally surface raw progress in tooltip if provided (helpful debugging info)
+            if (typeof payload.raw_progress !== 'undefined') {
+                const toastData = activeToasts.get(jobId);
+                if (toastData) {
+                    const detailsEl = toastData.element.querySelector('.toast-track-details');
+                    if (detailsEl) {
+                        detailsEl.title = `${detailsEl.title || ''} (raw: ${payload.raw_progress}%)`.trim();
+                    }
                 }
-                break;
-            case 'heartbeat':
-                // Do nothing for heartbeats
-                break;
-            default:
-                logMessage(`Unknown event type: ${data.type}`, 'error');
+            }
         }
-    };
-    
-    eventSource.onerror = function(err) {
-        console.error("EventSource failed:", err);
-        logMessage("Connection lost. Reconnecting...", "error");
-        createErrorToast("Connection lost. Reconnecting...");
-        eventSource.close();
-        setTimeout(setupEventSource, 5000);
-    };
-    
-    return eventSource;
+
+        // Status updates may contain step info; surface them as a hover/title on details
+        else if (type === 'status' && payload.step) {
+            const toastData = activeToasts.get(jobId);
+            if (toastData) {
+                const detailsEl = toastData.element.querySelector('.toast-track-details');
+                const stepEl = toastData.element.querySelector('.toast-step');
+                if (detailsEl) {
+                    detailsEl.title = payload.step;
+                }
+                if (stepEl) {
+                    stepEl.textContent = payload.step;
+                }
+            }
+        }
+
+        // File-level events: backend emits these as each artifact is moved into the artifacts dir.
+        // Use them to show which file was last stored and as a reliable fallback when download-phase
+        // progress events are not available. We compute two fallbacks:
+        //  - downloadFallback (0..70) : shows per-track completion during download when a track file appears.
+        //  - storingFallback (70..95) : shows progress through the storing/aggregation phase after move.
+        else if (type === 'file' && (payload.filename || payload.name)) {
+            const toastData = activeToasts.get(jobId);
+            const fileDisplay = payload.name || payload.filename;
+            if (toastData) {
+                const stepEl = toastData.element.querySelector('.toast-step');
+                const detailsEl = toastData.element.querySelector('.toast-track-details');
+                if (stepEl) {
+                    stepEl.textContent = `Saved: ${fileDisplay}`;
+                }
+                if (detailsEl) {
+                    detailsEl.title = `Saved: ${fileDisplay}`;
+                }
+            }
+
+            if (typeof payload.index !== 'undefined' && typeof payload.total !== 'undefined' && payload.total > 0) {
+                const idx = Number(payload.index);
+                const total = Number(payload.total);
+
+                // Download-phase fallback: each completed track advances 0..70.
+                // Use (index-1)/total so the download-phase increment happens when the file is saved,
+                // representing the prior track being fully downloaded.
+                const downloadFallback = Math.floor(((idx - 1) / total) * 70);
+                // Storing-phase fallback: stored files advance 70..95.
+                const storingFallback = 70 + Math.floor((idx / total) * 25);
+
+                const toastData2 = activeToasts.get(jobId);
+                const current = toastData2 ? toastData2.progress || 0 : 0;
+
+                // Prefer the larger of the sensible fallbacks, but avoid regressions.
+                const candidate = Math.max(downloadFallback, storingFallback);
+                if (candidate > current) {
+                    updateToastProgress(jobId, Math.min(candidate, 95));
+                }
+            }
+        }
+
+        // Checkpoints indicate logical milestones; server may also emit progress events, but keep visual nudges as a fallback.
+        else if (type === 'checkpoint') {
+            if (payload.message === 'download_complete') {
+                updateToastProgress(jobId, 90);
+            } else if (payload.message === 'zip_complete') {
+                updateToastProgress(jobId, 95);
+            }
+        }
+
+        // Zip failure should not fail the overall job but should alert the user
+        else if (type === 'zip_failed') {
+            createSimpleToast(jobId, { title: jobId, artist: '', album: '' }, 'Album ZIP creation failed; individual tracks are available', 'error');
+        }
+
+        // Final result may include files; use it to redirect to the primary artifact
+        else if (type === 'result' && Array.isArray(payload.files)) {
+            const storedFilename = payload.files[0] && payload.files[0].filename;
+            if (storedFilename) {
+                // close ES before redirecting
+                try { es.close(); } catch (e) {}
+                window.jobEventSources.delete(jobId);
+                window.location.href = `/files/${encodeURIComponent(storedFilename)}`;
+            }
+        }
+
+        // Error events from backend
+        else if (type === 'error') {
+            createErrorToast(payload.message || 'Download error');
+        }
+
+    } catch (err) {
+        // ignore parse/handler errors per job event
+        console.error('Job SSE handler error', err);
+    }
+};
+
+        es.onerror = () => {
+            // On persistent SSE errors close and remove so future attempts can re-subscribe
+            try { es.close(); } catch (e) {}
+            window.jobEventSources.delete(jobId);
+        };
+
+        window.jobEventSources.set(jobId, es);
+    } catch (err) {
+        console.error('Failed to subscribe to job events', err);
+    }
 }
 
 function performSearch(append = false) {
@@ -625,184 +746,71 @@ function downloadTrack(track) {
         return;
     }
 
-    logMessage(`Starting download: ${track.performer.name} - ${track.title}`, 'info');
-    
-    const downloadId = `track-${track.id}`;
+    logMessage(`Queueing download: ${track.performer.name} - ${track.title}`, 'info');
+
     const trackInfo = {
         title: track.title,
         artist: track.performer.name,
         album: track.album.title,
         albumArtUrl: track.image.small
     };
-    
-    createToast(downloadId, trackInfo);
-    
-    fetch('/api/download-song', {
+
+    const source = {
+        service: service,
+        id: track.id,
+        type: 'track'
+    };
+
+    fetch('/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ track, service: service })
+        body: JSON.stringify({ source: source })
     })
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(data => {
-                throw new Error(data.error || 'Download failed');
-            });
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
         }
-        
-        const disposition = response.headers.get('Content-Disposition');
-        let filename = `${track.performer.name} - ${track.title}.flac`;
-        if (disposition && disposition.indexOf('attachment') !== -1) {
-            const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-            const matches = filenameRegex.exec(disposition);
-            if (matches != null && matches[1]) {
-                filename = matches[1].replace(/['"]/g, '');
-            }
-        }
-        
-        return response.blob().then(blob => ({ blob, filename }));
-    })
-    .then(({ blob, filename }) => {
-        updateToastProgress(downloadId, 100);
-        
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        
-        logMessage(`Downloaded: ${track.title}`, 'success');
-        
-        setTimeout(removeAllToasts, 2500);
+        const jobId = data.id;
+        createToast(jobId, trackInfo);
+        pollJobStatus(jobId);
+        // Subscribe to server-sent events for real-time progress/status updates (best-effort)
+        subscribeToJobEvents(jobId);
     })
     .catch(error => {
-        const toastData = activeToasts.get(downloadId);
-        if (toastData) {
-            toastData.element.classList.add('error-toast');
-        }
-        logMessage(`Download failed: ${error.message}`, 'error');
-        setTimeout(() => removeToast(downloadId), 5000);
+        logMessage(`Failed to queue download: ${error.message}`, 'error');
+        createErrorToast(`Failed to queue download: ${error.message}`);
     });
 }
 
 async function downloadPlaylistInChunks(queries, service) {
-    let successfulDownloads = 0;
-    let failedDownloads = 0;
-    let isCancelled = false;
     const totalTracks = queries.length;
-
-    const playlistToastId = 'playlist-download';
-    
-    // Update the existing toast to show it's starting downloads
-    const toastData = activeToasts.get(playlistToastId);
-    if (toastData) {
-        const titleElement = toastData.element.querySelector('.toast-track-title');
-        const detailsElement = toastData.element.querySelector('.toast-track-details');
-        const messageElement = toastData.element.querySelector('.toast-message');
-        
-        if (titleElement) titleElement.textContent = 'Playlist Downloading';
-        if (detailsElement) detailsElement.textContent = `Starting download of ${totalTracks} tracks...`;
-        if (messageElement) messageElement.textContent = 'Preparing downloads...';
-    } else {
-        // Fallback in case the toast wasn't created
-        createPlaylistToast(totalTracks);
-    }
-
-    const cancelBtn = document.getElementById('cancel-playlist-btn');
-    const startBtn = document.getElementById('start-playlist-btn');
-
-    const cancelHandler = () => {
-        isCancelled = true;
-        logMessage('Playlist download cancelled by user.', 'info');
-        
-        const startBtn = document.getElementById('start-playlist-btn');
-        const cancelBtn = document.getElementById('cancel-playlist-btn');
-        
-        if (startBtn) startBtn.style.display = 'inline-block';
-        if (cancelBtn) cancelBtn.style.display = 'none';
-    };
-
-    if (cancelBtn) {
-        const newCancelBtn = cancelBtn.cloneNode(true);
-        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
-        newCancelBtn.addEventListener('click', cancelHandler, { once: true });
-    }
+    createPlaylistToast(totalTracks);
 
     for (let i = 0; i < totalTracks; i++) {
-        if (isCancelled) break;
-
         const query = queries[i];
-        const progressMessage = `Downloading ${i + 1}/${totalTracks}`;
+        logMessage(`Searching for track: ${query}`, 'info');
         
-        // Update the message element directly instead of using updateSimpleToast
-        const currentToastData = activeToasts.get(playlistToastId);
-        if (currentToastData) {
-            const messageElement = currentToastData.element.querySelector('.toast-message');
-            if (messageElement) {
-                messageElement.textContent = progressMessage;
-            }
-        }
-        
-        logMessage(`${progressMessage}: ${query}`, 'info');
-
         try {
-            const response = await fetch('/api/download-playlist', {
+            const searchResponse = await fetch('/api/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    queries: [query], // Send one query at a time
-                    service: service
-                })
+                body: JSON.stringify({ query: query, type: 'track', limit: 1, service: service })
             });
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `Server error: ${response.status}`);
+            const searchData = await searchResponse.json();
+
+            if (searchData.error || searchData.length === 0) {
+                throw new Error(searchData.error || "Track not found");
             }
 
-            const data = await response.json();
-            if (data.results && data.results[0].status === 'success') {
-                successfulDownloads++;
-            } else {
-                failedDownloads++;
-                logMessage(`Failed to download: ${query}. Reason: ${data.results[0].message || 'Unknown'}`, 'error');
-            }
+            const track = searchData[0];
+            downloadTrack(track);
 
-        } catch (err) {
-            console.error(`[error] Failed to download ${query}:`, err);
-            logMessage(`Error downloading ${query}: ${err.message}`, 'error');
-            failedDownloads++;
+        } catch (error) {
+            logMessage(`Failed to process playlist item "${query}": ${error.message}`, 'error');
+            createErrorToast(`Failed to process playlist item "${query}": ${error.message}`);
         }
-    }
-
-    if (!isCancelled) {
-        const finalMessage = `Finished. Success: ${successfulDownloads}, Failed: ${failedDownloads}`;
-        
-        // Update the final message
-        const finalToastData = activeToasts.get(playlistToastId);
-        if (finalToastData) {
-            const messageElement = finalToastData.element.querySelector('.toast-message');
-            const titleElement = finalToastData.element.querySelector('.toast-track-title');
-            
-            if (messageElement) messageElement.textContent = finalMessage;
-            if (titleElement) titleElement.textContent = 'Playlist Complete';
-            
-            // Mark as completed for cleanup
-            finalToastData.completed = true;
-            finalToastData.completedAt = Date.now();
-        }
-        
-        logMessage(`Playlist download finished. Success: ${successfulDownloads}, Failed: ${failedDownloads}`, 'info');
-        if (startBtn) startBtn.style.display = 'inline-block';
-        if (cancelBtn) cancelBtn.style.display = 'none';
-        
-        // Remove the toast after showing completion for 5 seconds
-        setTimeout(() => removeToast(playlistToastId), 5000);
-    } else {
-        removeToast(playlistToastId);
     }
 }
 
@@ -814,61 +822,41 @@ async function downloadAlbum(album) {
         return;
     }
 
-    logMessage(`Starting album download: ${album.artist.name} - ${album.title}`, 'info');
-    
-    const downloadId = `album-${album.id}`;
+    logMessage(`Queueing album download: ${album.artist.name} - ${album.title}`, 'info');
+
     const albumInfo = {
         title: album.title,
         artist: album.artist.name,
         album: album.title,
         albumArtUrl: album.image.small
     };
-    
-    createSimpleToast(downloadId, albumInfo, 'Downloading album...');
 
-    try {
-        const response = await fetch('/api/download-album', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ album_id: album.id, service: service })
-        });
+    const source = {
+        service: service,
+        id: album.id,
+        type: 'album'
+    };
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Album download failed');
+    fetch('/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: source })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
         }
-
-        const disposition = response.headers.get('Content-Disposition');
-        let filename = 'album.zip';
-        if (disposition && disposition.indexOf('attachment') !== -1) {
-            const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-            const matches = filenameRegex.exec(disposition);
-            if (matches != null && matches[1]) {
-                filename = matches[1].replace(/['"]/g, '');
-            }
-        }
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        
-        updateSimpleToast(downloadId, 'Album Download Complete!', 'success');
-        logMessage(`Album downloaded: ${filename}`, 'success');
-        setTimeout(removeAllToasts, 2500);
-        
-    } catch (error) {
-        const downloadId = `album-${album.id}`;
-        updateSimpleToast(downloadId, 'Album Download Failed', 'error');
-        logMessage(`Album download failed: ${error.message}`, 'error');
-        setTimeout(removeAllToasts, 3000);
-    }
+        const jobId = data.id;
+        createToast(jobId, albumInfo);
+        pollJobStatus(jobId);
+        // Subscribe to server-sent events for real-time progress/status updates (best-effort)
+        subscribeToJobEvents(jobId);
+    })
+    .catch(error => {
+        logMessage(`Failed to queue album download: ${error.message}`, 'error');
+        createErrorToast(`Failed to queue album download: ${error.message}`);
+    });
 }
 
 function cancelDownloads() {
@@ -960,7 +948,6 @@ document.addEventListener('DOMContentLoaded', () => {
         toastContainer.id = 'toast-queue-container';
         document.body.appendChild(toastContainer);
     }
-    setupEventSource();
 
     const servicePicker = document.querySelector('.service-picker');
     if (servicePicker) {
@@ -1060,7 +1047,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Clean up on page unload
 window.addEventListener('beforeunload', () => {
-    if (eventSource) {
-        eventSource.close();
-    }
 });

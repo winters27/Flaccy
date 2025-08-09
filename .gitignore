@@ -9,8 +9,6 @@ __pycache__/
 
 # Docker
 .dockerignore
-docker-compose.yml
-nginx.conf
 
 # Downloads
 downloads/
@@ -18,3 +16,9 @@ downloads/
 # IDE settings
 .vscode/
 .idea/
+
+# Instance and logs
+instance/
+logs/
+.qobuz_session
+OrpheusDL/config/loginstorage.bin

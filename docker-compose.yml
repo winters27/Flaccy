@@ -8,8 +8,66 @@ services:
       - 8.8.8.8
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite:////app/instance/flaccy.db
     volumes:
+      - ./:/app
+      - ./instance:/app/instance
       - ./downloads:/app/downloads
+      - ./instance/artifacts:/app/instance/artifacts
     ports:
       - "5000:5000"
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./instance/artifacts:/app/instance/artifacts
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /etc/ssl/cf_origin/fullchain.pem:/etc/ssl/cf_origin/fullchain.pem:ro
+      - /etc/ssl/cf_origin/privkey.pem:/etc/ssl/cf_origin/privkey.pem:ro
+    command: sh -c "sleep 3 && nginx -g 'daemon off;'"
+    depends_on:
+      - flaccy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: flaccy_worker
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite:////app/instance/flaccy.db
+    volumes:
+      - ./:/app
+      - ./instance:/app/instance
+      - ./downloads:/app/downloads
+      - ./instance/artifacts:/app/instance/artifacts
+    depends_on:
+      - redis
+      - flaccy
+    command: ["python", "worker.py"]
+    restart: unless-stopped
+
+  cleanup:
+    build: .
+    container_name: flaccy_cleanup
+    volumes:
+      - ./:/app
+      - ./instance:/app/instance
+    command: ["/app/scripts/run_cleanup_loop.sh"]
     restart: unless-stopped
