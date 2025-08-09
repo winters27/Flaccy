@@ -11,8 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY OrpheusDL /app/OrpheusDL
 COPY app /app/app
+COPY scripts /app/scripts
 COPY run.py /app/
 COPY gunicorn.conf.py /app/
+
+RUN chmod +x /app/scripts/*.sh
 
 EXPOSE 5000
 
