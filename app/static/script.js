@@ -32,7 +32,8 @@ let currentSearchType = 'track';
 let currentOffset = 0;
 let isLoading = false;
 let noMoreResults = false;
-const SEARCH_LIMIT = 20;
+const SEARCH_LIMIT = 28;
+let displayedIds = new Set();
 
 function processToastQueue() {
     if (isProcessingQueue || toastQueue.length === 0) return;
@@ -411,18 +412,14 @@ function logMessage(message, type = 'info') {
 }
 
 function displaySearchResults(results, append = false) {
-    const contentArea = document.querySelector('.content-area');
-    let resultsContainer = document.getElementById('search-results');
+    const resultsContainer = document.getElementById('search-results');
+    if (!resultsContainer) return; // Guard if container not found
 
-    if (!resultsContainer) {
-        resultsContainer = document.createElement('div');
-        resultsContainer.id = 'search-results';
-        resultsContainer.classList.add('section');
-        contentArea.appendChild(resultsContainer);
-    }
-    
+    const resultsContainerWrapper = resultsContainer.parentElement;
+
     if (!append) {
         resultsContainer.innerHTML = '';
+        displayedIds.clear();
     }
 
     if (!results || results.length === 0) {
@@ -433,59 +430,66 @@ function displaySearchResults(results, append = false) {
         return;
     }
 
-    results.forEach(item => {
+    const newResults = results.filter(item => !displayedIds.has(item.id));
+    newResults.forEach(item => displayedIds.add(item.id));
+
+    newResults.forEach(item => {
         const itemElement = document.createElement('div');
         itemElement.classList.add('search-result-item');
 
+        let albumArt, title, artist, buttonText;
+
         if (currentSearchType === 'track') {
-            const albumArt = getAlbumArtSrc(item.image && item.image.small ? item.image.small : null);
-            const title = item.title;
-            const artist = item.performer ? item.performer.name : 'Unknown Artist';
-
-            itemElement.innerHTML = `
-                <img src="${albumArt}" alt="Album Art" class="album-art" onerror="this.src='${STATIC_ASSETS.FALLBACK_IMAGE}'">
-                <div class="track-info">
-                    <p class="track-title">${title}</p>
-                    <p class="track-artist">${artist}</p>
-                </div>
-                <button class="download-btn">Download</button>
-            `;
-            itemElement.dataset.item = JSON.stringify(item);
-
+            albumArt = getAlbumArtSrc(item.image && item.image.small ? item.image.small : null);
+            title = item.title;
+            artist = item.performer ? item.performer.name : 'Unknown Artist';
+            buttonText = 'Download';
         } else if (currentSearchType === 'album') {
-            const albumArt = getAlbumArtSrc(item.image && item.image.small ? item.image.small : null);
-            const title = item.title;
-            const artist = item.artist ? item.artist.name : 'Unknown Artist';
-
-            itemElement.innerHTML = `
-                <img src="${albumArt}" alt="Album Art" class="album-art" onerror="this.src='${STATIC_ASSETS.FALLBACK_IMAGE}'">
-                <div class="track-info">
-                    <p class="track-title">${title}</p>
-                    <p class="track-artist">${artist}</p>
-                </div>
-                <button class="download-btn">Download Album</button>
-            `;
-            itemElement.dataset.item = JSON.stringify(item);
+            albumArt = getAlbumArtSrc(item.image && item.image.small ? item.image.small : null);
+            title = item.title;
+            artist = item.artist ? item.artist.name : 'Unknown Artist';
+            buttonText = 'Download Album';
         }
+
+        let metadataHTML = '';
+        if (currentSearchType === 'track' && item.bit_depth && item.sample_rate) {
+            metadataHTML = `
+                <div class="metadata">
+                    <span>${item.bit_depth} bit / ${item.sample_rate} kHz</span>
+                    <span>${item.codec}</span>
+                </div>
+            `;
+        } else if (currentSearchType === 'album' && item.quality) {
+            metadataHTML = `
+                <div class="metadata">
+                    <span>${item.quality}</span>
+                </div>
+            `;
+        }
+
+        let previewButtonHTML = '';
+        if (currentSearchType === 'track' && item.preview_url) {
+            previewButtonHTML = `<button class="preview-btn" data-preview-url="${item.preview_url}">Preview</button>`;
+        }
+
+        itemElement.innerHTML = `
+            <div class="album-art-container">
+                <img src="${albumArt}" alt="Album Art" class="album-art" onerror="this.src='${STATIC_ASSETS.FALLBACK_IMAGE}'">
+                <div class="overlay">
+                    ${metadataHTML}
+                    ${previewButtonHTML}
+                    <button class="download-btn">${buttonText}</button>
+                </div>
+            </div>
+            <div class="track-info">
+                <p class="track-title">${title}</p>
+                <p class="track-artist">${artist}</p>
+            </div>
+        `;
+        itemElement.dataset.item = JSON.stringify(item);
         resultsContainer.appendChild(itemElement);
     });
 
-    // --- Show More Button ---
-    let existingBtn = document.getElementById('show-more-btn');
-    if (existingBtn) {
-        existingBtn.remove();
-    }
-
-    if (!noMoreResults) {
-        let showMoreBtn = document.createElement('button');
-        showMoreBtn.id = 'show-more-btn';
-        showMoreBtn.textContent = 'Show More';
-        showMoreBtn.classList.add('download-btn');
-        showMoreBtn.addEventListener('click', () => {
-            performSearch(true);
-        });
-        resultsContainer.appendChild(showMoreBtn);
-    }
 }
 
 function pollJobStatus(jobId) {
@@ -689,6 +693,10 @@ function performSearch(append = false) {
     if (searchBtn) {
         searchBtn.classList.add('loading');
     }
+    const loadingSpinner = document.getElementById('loading-spinner');
+    if (loadingSpinner) {
+        loadingSpinner.classList.remove('hidden');
+    }
 
     if (!append) {
         currentOffset = 0;
@@ -734,6 +742,10 @@ function performSearch(append = false) {
         isLoading = false;
         if (searchBtn) {
             searchBtn.classList.remove('loading');
+        }
+        const loadingSpinner = document.getElementById('loading-spinner');
+        if (loadingSpinner) {
+            loadingSpinner.classList.add('hidden');
         }
     });
 }
@@ -897,8 +909,7 @@ function initializeSearch() {
     const searchBtn = document.getElementById('search-btn');
 
     if (searchBtn) {
-        // Add the loader and text span to the button
-        searchBtn.innerHTML = '<span class="btn-text">Search</span><div class="loader"></div>';
+        const originalContent = searchBtn.innerHTML;
         searchBtn.addEventListener('click', () => {
             const query = searchInput.value;
             if (!query) {
@@ -923,6 +934,14 @@ function initializeSearch() {
                 }
             }
         });
+
+        searchInput.addEventListener('input', () => {
+            if (searchInput.value.length > 0) {
+                searchBtn.classList.remove('hidden');
+            } else {
+                searchBtn.classList.add('hidden');
+            }
+        });
     }
 }
 
@@ -942,6 +961,18 @@ function selectService(service) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    let scrollTimeout;
+    window.addEventListener('scroll', () => {
+        if (isLoading || noMoreResults || !currentQuery) return;
+
+        clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+            if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+                performSearch(true);
+            }
+        }, 100);
+    });
+
     let toastContainer = document.getElementById('toast-queue-container');
     if (!toastContainer) {
         toastContainer = document.createElement('div');
@@ -962,23 +993,53 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set initial service
     selectService('tidal');
 
-    const contentArea = document.querySelector('.content-area');
-    contentArea.addEventListener('click', function(e) {
-        if (e.target.classList.contains('download-btn')) {
-            const item = e.target.closest('.search-result-item');
-            if (!item) return;
-            
-            const itemData = JSON.parse(item.dataset.item);
-            
-            const searchType = item.closest('#search-results') ? currentSearchType : 'track';
+    const resultsContainer = document.getElementById('search-results');
+    if (resultsContainer) {
+        resultsContainer.addEventListener('click', function(e) {
+            if (e.target.classList.contains('download-btn')) {
+                const item = e.target.closest('.search-result-item');
+                if (!item) return;
+                
+                const itemData = JSON.parse(item.dataset.item);
+                
+                if (currentSearchType === 'track') {
+                    downloadTrack(itemData);
+                } else if (currentSearchType === 'album') {
+                    downloadAlbum(itemData);
+                }
+            } else if (e.target.classList.contains('preview-btn')) {
+                const item = e.target.closest('.search-result-item');
+                if (!item) return;
 
-            if (searchType === 'track') {
-                downloadTrack(itemData);
-            } else if (searchType === 'album') {
-                downloadAlbum(itemData);
+                const itemData = JSON.parse(item.dataset.item);
+                const service = document.body.dataset.service;
+
+                fetch('/api/preview', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        service: service,
+                        track_id: itemData.id
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        createErrorToast(data.error);
+                    } else {
+                        const audio = new Audio(data.preview_url);
+                        audio.play();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    createErrorToast('Failed to play preview. Check console for details.');
+                });
             }
-        }
-    });
+        });
+    }
 
     const playlistInput = document.getElementById('playlist-input');
     const startPlaylistBtn = document.getElementById('start-playlist-btn');

@@ -68,13 +68,6 @@
     },
     "extensions": {},
     "modules": {
-        "qobuz": {
-            "app_id": "798273057",
-            "app_secret": "abb21364945c0583309667d13ca3d93a",
-            "quality_format": "{sample_rate}kHz {bit_depth}bit",
-            "username": "winters.brandon@pm.me",
-            "password": "ydbqPy7wA9wcD$"
-        },
         "tidal": {
             "tv_atmos_token": "4N3n6Q1x95LL5K7p",
             "tv_atmos_secret": "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik=",
@@ -83,6 +76,13 @@
             "enable_mobile": true,
             "prefer_ac4": false,
             "fix_mqa": true
+        },
+        "qobuz": {
+            "app_id": "798273057",
+            "app_secret": "abb21364945c0583309667d13ca3d93a",
+            "quality_format": "{sample_rate}kHz {bit_depth}bit",
+            "username": "winters.brandon@pm.me",
+            "password": "ydbqPy7wA9wcD$"
         }
     }
 }

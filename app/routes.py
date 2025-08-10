@@ -103,14 +103,18 @@ def search():
                         'id': item.result_id,
                         'title': album_info.name if album_info else item.name,
                         'artist': {'name': album_info.artist if album_info else (item.artists[0] if item.artists else 'Unknown Artist')},
-                        'image': {'small': album_info.cover_url if album_info else ''}
+                        'image': {'small': album_info.cover_url if album_info else ''},
+                        'duration': album_info.duration,
+                        'quality': album_info.quality
                     }
                 except:
                     return {
                         'id': item.result_id,
                         'title': item.name,
                         'artist': {'name': item.artists[0] if item.artists else 'Unknown Artist'},
-                        'image': {'small': ''}
+                        'image': {'small': ''},
+                        'duration': None,
+                        'quality': None
                     }
 
             jobs = [pool.spawn(fetch_album_info, item) for item in search_results]
@@ -148,7 +152,11 @@ def search():
                             'title': item.name,
                             'performer': {'name': item.artists[0] if item.artists else 'Unknown Artist'},
                             'album': {'title': album_info.name},
-                            'image': {'small': album_info.cover_url}
+                            'image': {'small': album_info.cover_url},
+                            'duration': track_info.duration,
+                            'bit_depth': track_info.bit_depth,
+                            'sample_rate': track_info.sample_rate,
+                            'codec': track_info.codec.name
                         }
                     except:
                         return {
@@ -156,7 +164,11 @@ def search():
                             'title': item.name,
                             'performer': {'name': item.artists[0] if item.artists else 'Unknown Artist'},
                             'album': {'title': 'Unknown Album'},
-                            'image': {'small': ''}
+                            'image': {'small': ''},
+                            'duration': None,
+                            'bit_depth': None,
+                            'sample_rate': None,
+                            'codec': None
                         }
 
                 jobs = [pool.spawn(fetch_track_album_info, item) for item in search_results]
