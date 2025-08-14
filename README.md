@@ -1,6 +1,6 @@
-<!-- Updated main image: replaced with screenshot-rocks.png added to app/static.
+<!-- Updated main image: replaced with flaccyweb.png added to app/static.
      Comment added by automated update. -->
-![Flaccy screenshot](app/static/screenshot-rocks.png)
+![Flaccy screenshot](app/static/flaccyweb.png)
 
 # Flaccy
 
