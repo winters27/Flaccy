@@ -413,7 +413,7 @@ function logMessage(message, type = 'info') {
 
 function displaySearchResults(results, append = false) {
     const resultsContainer = document.getElementById('search-results');
-    if (!resultsContainer) return; // Guard if container not found
+    if (!resultsContainer) return;
 
     const resultsContainerWrapper = resultsContainer.parentElement;
 
@@ -472,24 +472,45 @@ function displaySearchResults(results, append = false) {
             previewButtonHTML = `<button class="preview-btn" data-preview-url="${item.preview_url}">Preview</button>`;
         }
 
-        itemElement.innerHTML = `
-            <div class="album-art-container">
-                <img src="${albumArt}" alt="Album Art" class="album-art" onerror="this.src='${STATIC_ASSETS.FALLBACK_IMAGE}'">
-                <div class="overlay">
-                    ${metadataHTML}
+        // Check if mobile to determine layout
+        const isMobile = window.innerWidth <= 768;
+
+        if (isMobile) {
+            // Mobile layout: horizontal with download button visible
+            itemElement.innerHTML = `
+                <div class="album-art-container">
+                    <img src="${albumArt}" alt="Album Art" class="album-art" onerror="this.src='${STATIC_ASSETS.FALLBACK_IMAGE}'">
+                </div>
+                <div class="track-info">
+                    <p class="track-title">${title}</p>
+                    <p class="track-artist">${artist}</p>
+                </div>
+                <div class="mobile-download-container">
                     ${previewButtonHTML}
                     <button class="download-btn">${buttonText}</button>
                 </div>
-            </div>
-            <div class="track-info">
-                <p class="track-title">${title}</p>
-                <p class="track-artist">${artist}</p>
-            </div>
-        `;
+            `;
+        } else {
+            // Desktop layout: with overlay
+            itemElement.innerHTML = `
+                <div class="album-art-container">
+                    <img src="${albumArt}" alt="Album Art" class="album-art" onerror="this.src='${STATIC_ASSETS.FALLBACK_IMAGE}'">
+                    <div class="overlay">
+                        ${metadataHTML}
+                        ${previewButtonHTML}
+                        <button class="download-btn">${buttonText}</button>
+                    </div>
+                </div>
+                <div class="track-info">
+                    <p class="track-title">${title}</p>
+                    <p class="track-artist">${artist}</p>
+                </div>
+            `;
+        }
+
         itemElement.dataset.item = JSON.stringify(item);
         resultsContainer.appendChild(itemElement);
     });
-
 }
 
 function pollJobStatus(jobId) {
@@ -961,18 +982,83 @@ function selectService(service) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    let scrollTimeout;
-    window.addEventListener('scroll', () => {
+    // Mobile detection function
+    function isMobile() {
+        return window.innerWidth <= 768;
+    }
+
+    // Setup infinite scroll for both mobile and desktop
+    function setupInfiniteScroll() {
+        // Remove existing listeners
+        window.removeEventListener('scroll', handleScroll);
+        const container = document.getElementById('search-results-container');
+        if (container) {
+            container.removeEventListener('scroll', handleScroll);
+        }
+
+        // Add new listener to appropriate element
+        if (isMobile() && container) {
+            container.addEventListener('scroll', handleScroll);
+        } else {
+            window.addEventListener('scroll', handleScroll);
+        }
+    }
+
+    function handleScroll() {
         if (isLoading || noMoreResults || !currentQuery) return;
 
         clearTimeout(scrollTimeout);
         scrollTimeout = setTimeout(() => {
-            if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+            let scrollTop, scrollHeight, clientHeight;
+
+            if (isMobile()) {
+                const container = document.getElementById('search-results-container');
+                if (!container) return;
+                scrollTop = container.scrollTop;
+                scrollHeight = container.scrollHeight;
+                clientHeight = container.clientHeight;
+            } else {
+                scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                scrollHeight = document.documentElement.scrollHeight;
+                clientHeight = window.innerHeight;
+            }
+
+            // Trigger when near bottom (500px from bottom)
+            if (scrollTop + clientHeight >= scrollHeight - 500) {
                 performSearch(true);
             }
         }, 100);
+    }
+
+    // Initialize scroll handling
+    let scrollTimeout;
+    setupInfiniteScroll();
+
+    // Re-setup on window resize
+    window.addEventListener('resize', () => {
+        clearTimeout(window.resizeTimeout);
+        window.resizeTimeout = setTimeout(() => {
+            // Re-render search results if they exist to switch between mobile/desktop layout
+            const resultsContainer = document.getElementById('search-results');
+            if (resultsContainer && resultsContainer.children.length > 0) {
+                const items = Array.from(resultsContainer.children).map(child => {
+                    if (child.dataset.item) {
+                        return JSON.parse(child.dataset.item);
+                    }
+                }).filter(Boolean);
+                
+                if (items.length > 0) {
+                    displayedIds.clear();
+                    displaySearchResults(items, false);
+                }
+            }
+            
+            // Re-setup infinite scroll
+            setupInfiniteScroll();
+        }, 250);
     });
 
+    // Toast container setup
     let toastContainer = document.getElementById('toast-queue-container');
     if (!toastContainer) {
         toastContainer = document.createElement('div');
@@ -980,6 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.appendChild(toastContainer);
     }
 
+    // Service picker setup
     const servicePicker = document.querySelector('.service-picker');
     if (servicePicker) {
         servicePicker.addEventListener('click', (e) => {
@@ -993,15 +1080,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set initial service
     selectService('tidal');
 
+    // Results container click handling
     const resultsContainer = document.getElementById('search-results');
     if (resultsContainer) {
         resultsContainer.addEventListener('click', function(e) {
             if (e.target.classList.contains('download-btn')) {
                 const item = e.target.closest('.search-result-item');
                 if (!item) return;
-                
+               
                 const itemData = JSON.parse(item.dataset.item);
-                
+               
                 if (currentSearchType === 'track') {
                     downloadTrack(itemData);
                 } else if (currentSearchType === 'album') {
@@ -1041,6 +1129,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Rest of your existing playlist and other event listeners...
     const playlistInput = document.getElementById('playlist-input');
     const startPlaylistBtn = document.getElementById('start-playlist-btn');
     const cancelBtn = document.getElementById('cancel-playlist-btn');
