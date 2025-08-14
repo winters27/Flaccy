@@ -1,4 +1,6 @@
-https://github.com/winters27/flaccy/blob/main/app/static/flaccy.png
+<!-- Updated main image: replaced with screenshot-rocks.png added to app/static.
+     Comment added by automated update. -->
+![Flaccy screenshot](app/static/screenshot-rocks.png)
 
 # Flaccy
 
@@ -181,4 +183,3 @@ Built on the excellent **OrpheusDL** project and its modules.
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
