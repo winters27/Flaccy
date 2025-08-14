@@ -21,7 +21,7 @@ downloads/
 instance/
 logs/
 .qobuz_session
-OrpheusDL/config/loginstorage.bin
+vendor/OrpheusDL/config/loginstorage.bin
 
 # Ignore binary storage files to prevent committing sensitive or large .bin files.
 # Added by automated update: ignore all .bin files in the repository.

@@ -1,3 +1,9 @@
+import sys
+import os
+
+# Add the vendor directory to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'vendor')))
+
 from app import create_app
 from app.orpheus_handler import initialize_modules
 from dotenv import load_dotenv

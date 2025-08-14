@@ -6,10 +6,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+ENV PYTHONPATH=/app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY OrpheusDL /app/OrpheusDL
+COPY vendor/OrpheusDL /app/vendor/OrpheusDL
 COPY app /app/app
 COPY scripts /app/scripts
 COPY run.py /app/
